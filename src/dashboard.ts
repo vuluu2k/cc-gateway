@@ -1280,13 +1280,13 @@ export function renderDashboard(): string {
       document.getElementById('step1Meta').innerHTML =
         'One-time per machine: enable <code>RemoteSigned</code> policy for your user, then strip the Mark-of-the-Web from the downloaded file.';
       document.getElementById('xattrCmd').textContent =
-        'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\' + fname;
+        'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\\\' + fname;
       document.getElementById('step2Meta').textContent =
         'Run the launcher with PowerShell to verify the gateway connection.';
-      document.getElementById('successCmd').textContent = '.\\' + fname;
+      document.getElementById('successCmd').textContent = '.\\\\' + fname;
       document.getElementById('step3Meta').innerHTML =
-        'Copies the launcher into <code>%LOCALAPPDATA%\\ccg-bin</code> and adds it to your user <code>PATH</code> (open a new terminal afterwards).';
-      document.getElementById('installCmd').textContent = '.\\' + fname + ' install';
+        'Copies the launcher into <code>%LOCALAPPDATA%\\\\ccg-bin</code> and adds it to your user <code>PATH</code> (open a new terminal afterwards).';
+      document.getElementById('installCmd').textContent = '.\\\\' + fname + ' install';
       document.getElementById('step4Meta').innerHTML =
         'Adds <code>Set-Alias claude ccg</code> to your PowerShell profile so every <code>claude</code> invocation routes through this gateway. New PowerShell windows pick it up; reload the current one with <code>. $PROFILE</code>. Undo with <code>ccg release</code>.';
       document.getElementById('hijackCmd').textContent = 'ccg hijack';
