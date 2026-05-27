@@ -271,7 +271,7 @@ function Invoke-Release {
 
 function Invoke-Native {
   $rest = if ($RestArgs.Count -gt 1) { $RestArgs[1..($RestArgs.Count - 1)] } else { @() }
-  $app = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue
+  $app = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $app) { Write-Error "claude not found"; exit 1 }
   & $app.Source @rest
   exit $LASTEXITCODE
@@ -335,7 +335,9 @@ if ($RestArgs -and $RestArgs.Count -gt 0) {
 }
 
 # Main: launch through gateway
-$claudeApp = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue
+# Pick first match — on Windows npm installs both 'claude' and 'claude.cmd';
+# without -First 1, $claudeApp is an array and '& $claudeApp.Source' joins paths.
+$claudeApp = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $claudeApp) {
   Write-Error "Error: 'claude' not found. Install Claude Code first:"
   Write-Error "  npm install -g @anthropic-ai/claude-code"
