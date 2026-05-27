@@ -381,8 +381,15 @@ export function renderDashboard(): string {
   .modal-box {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 24px; width: 420px; max-width: 92vw;
+    max-height: 92vh; overflow-y: auto;
   }
+  .modal-box.wide { width: 560px; }
   .modal-box h3 { margin: 0 0 4px; }
+  .step-label { margin: 16px 0 6px !important; color: var(--fg) !important; font-size: 12px !important; font-family: inherit !important; text-transform: uppercase; letter-spacing: .04em; }
+  .step-label .num { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; text-align: center; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; margin-right: 6px; }
+  .cmd-table { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px; }
+  .cmd-table code { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+  .cmd-table span { color: var(--muted); }
   .modal-box label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 4px; }
   .modal-box input, .modal-box select {
     width: 100%; padding: 8px 10px; box-sizing: border-box;
@@ -522,23 +529,52 @@ export function renderDashboard(): string {
 
     <div id="modalSuccess" style="display:none">
       <h3>Client created · <span id="successName"></span></h3>
-      <p class="meta" style="margin:0 0 16px">File <code id="successFile"></code> has been downloaded. Send it to the user and ask them to run:</p>
+      <p class="meta" style="margin:0 0 4px">File <code id="successFile"></code> has been downloaded. Send it to the user and follow the steps below.</p>
+
+      <p class="step-label"><span class="num">1</span>Run the launcher (quick test)</p>
+      <p class="meta" style="margin:0 0 6px">Make it executable and start Claude Code through the gateway.</p>
       <div class="snippet-block">
         <pre id="successCmd"></pre>
         <button id="copyCmdBtn" type="button" class="copy-btn">Copy</button>
       </div>
-      <p class="meta" style="margin:14px 0 8px">Or to install system-wide as <code>ccg</code>:</p>
+
+      <p class="step-label"><span class="num">2</span>Install system-wide as <code>ccg</code></p>
+      <p class="meta" style="margin:0 0 6px">Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.</p>
       <div class="snippet-block">
         <pre id="installCmd"></pre>
         <button id="copyInstallBtn" type="button" class="copy-btn">Copy</button>
       </div>
-      <p class="meta" style="margin:14px 0 8px">On macOS, if Gatekeeper blocks the file:</p>
+
+      <p class="step-label"><span class="num">3</span>Hijack <code>claude</code> → gateway (optional)</p>
+      <p class="meta" style="margin:0 0 6px">Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.</p>
+      <div class="snippet-block">
+        <pre id="hijackCmd">ccg hijack</pre>
+        <button id="copyHijackBtn" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label">All <code>ccg</code> subcommands</p>
+      <div class="cmd-table">
+        <code>ccg</code><span>Start Claude Code through this gateway.</span>
+        <code>ccg [claude args]</code><span>Forward any flags to Claude Code (e.g. <code>--model</code>, <code>--resume</code>).</span>
+        <code>ccg --print "hi"</code><span>Single-shot non-interactive mode.</span>
+        <code>ccg install</code><span>Install this launcher as the <code>ccg</code> system command.</span>
+        <code>ccg uninstall</code><span>Remove <code>ccg</code> and undo any hijack alias.</span>
+        <code>ccg hijack</code><span>Alias <code>claude</code> to <code>ccg</code> so the native CLI routes through the gateway.</span>
+        <code>ccg release</code><span>Remove the alias — <code>claude</code> goes back to native.</span>
+        <code>ccg native [args]</code><span>Run native <code>claude</code> once, bypassing the gateway (no permanent change).</span>
+        <code>ccg status</code><span>Show the configured gateway URL, hijack state, and a health check.</span>
+        <code>ccg help</code><span>Print the same command list inside the terminal.</span>
+      </div>
+
+      <p class="step-label">macOS — if Gatekeeper blocks the file</p>
       <div class="snippet-block">
         <pre id="xattrCmd"></pre>
         <button id="copyXattrBtn" type="button" class="copy-btn">Copy</button>
       </div>
+
       <p class="meta" style="margin:14px 0 0;font-size:12px">
-        Prerequisites: claude code installed (<code>npm install -g @anthropic-ai/claude-code</code>).
+        Prerequisite: Claude Code installed (<code>npm install -g @anthropic-ai/claude-code</code>).
+        The launcher only sets env vars for its own process — nothing is written to the user's shell config unless they run <code>ccg hijack</code>.
       </p>
       <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
         <button id="successDone" type="button" class="primary">Done</button>
@@ -1018,6 +1054,8 @@ export function renderDashboard(): string {
     else { el.style.display = 'none'; }
   };
 
+  const modalBoxEl = () => document.querySelector('#addClientModal .modal-box');
+
   const openModal = () => {
     document.getElementById('cName').value = '';
     document.getElementById('cAddr').value = location.host;
@@ -1025,6 +1063,7 @@ export function renderDashboard(): string {
     document.getElementById('cLimit').value = '';
     document.getElementById('cLimitPeriod').value = 'lifetime';
     showError(null);
+    modalBoxEl().classList.remove('wide');
     document.getElementById('modalForm').style.display = 'block';
     document.getElementById('modalSuccess').style.display = 'none';
     document.getElementById('addClientModal').style.display = 'flex';
@@ -1036,6 +1075,7 @@ export function renderDashboard(): string {
     document.getElementById('modalForm').style.display = 'none';
     const sucEl = document.getElementById('modalSuccess');
     sucEl.style.display = 'block';
+    modalBoxEl().classList.add('wide');
     document.getElementById('successName').textContent = name;
     document.getElementById('successFile').textContent = 'cc-' + name;
     document.getElementById('successCmd').textContent =
@@ -1166,6 +1206,7 @@ export function renderDashboard(): string {
   document.getElementById('successDone').addEventListener('click', closeModal);
   wireCopyButton('copyCmdBtn', 'successCmd');
   wireCopyButton('copyInstallBtn', 'installCmd');
+  wireCopyButton('copyHijackBtn', 'hijackCmd');
   wireCopyButton('copyXattrBtn', 'xattrCmd');
   document.getElementById('addClientModal').addEventListener('click', (e) => {
     if (e.target.id === 'addClientModal') closeModal();
