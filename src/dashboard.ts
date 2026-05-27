@@ -276,6 +276,14 @@ export function renderDashboard(): string {
     /* Recent message/path get full row width — no more truncation needed */
     .msg, .path { max-width: none; white-space: normal; word-break: break-word; }
 
+    /* Filter bar: search spans full width, selects sit two per row, button
+       and count each take their own line so touch targets stay large. */
+    .filter-bar { gap: 6px; }
+    .filter-bar input[type="search"] { flex: 1 1 100%; font-size: 16px; padding: 8px 10px; }
+    .filter-bar select { flex: 1 1 calc(50% - 4px); font-size: 13px; padding: 8px 10px; }
+    .filter-bar button { flex: 1 1 100%; padding: 8px 10px; font-size: 13px; }
+    .filter-bar .count { flex: 1 1 100%; margin-left: 0; text-align: center; }
+
     .modal-box {
       width: 100%; max-width: 100vw; height: 100vh; max-height: 100vh;
       border-radius: 0; border: 0; padding: 18px;
@@ -414,6 +422,28 @@ export function renderDashboard(): string {
   }
   .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
   .copy-btn.copied { color: var(--ok); border-color: var(--ok); }
+
+  /* Compact filter bar for the Recent requests table. Inputs share the same
+     dark-panel styling as the toolbar selects but at a smaller, denser scale
+     so a row of 5 filters + a count fits comfortably above the table. */
+  .filter-bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 12px;
+  }
+  .filter-bar input, .filter-bar select {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; font-family: inherit;
+  }
+  .filter-bar input:focus, .filter-bar select:focus { outline: none; border-color: var(--accent); }
+  .filter-bar input[type="search"] { flex: 1 1 220px; min-width: 180px; }
+  .filter-bar select { min-width: 110px; }
+  .filter-bar button { padding: 6px 10px; font-size: 12px; }
+  .filter-bar .count {
+    margin-left: auto; font-size: 11px; color: var(--muted);
+    font-family: var(--mono); white-space: nowrap;
+  }
+  .filter-bar .count.active { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -475,6 +505,27 @@ export function renderDashboard(): string {
         Recent requests
         <span id="pauseHint" class="meta" style="float:right;font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:var(--muted)"></span>
       </h2>
+      <div id="recentFilters" class="filter-bar" style="display:none">
+        <input id="rfSearch" type="search" placeholder="Search client / path / model / message…" autocomplete="off" />
+        <select id="rfClient"><option value="">All clients</option></select>
+        <select id="rfModel"><option value="">All models</option></select>
+        <select id="rfStatus">
+          <option value="">All status</option>
+          <option value="2xx">2xx success</option>
+          <option value="3xx">3xx redirect</option>
+          <option value="4xx">4xx client error</option>
+          <option value="5xx">5xx server error</option>
+        </select>
+        <select id="rfMethod">
+          <option value="">All methods</option>
+          <option>GET</option>
+          <option>POST</option>
+          <option>PUT</option>
+          <option>DELETE</option>
+        </select>
+        <button id="rfClear" type="button">Clear</button>
+        <span id="rfCount" class="count"></span>
+      </div>
       <div id="recentTable"></div>
     </section>
     <details id="about" class="card">
@@ -845,6 +896,98 @@ export function renderDashboard(): string {
   const RECENT_KEEP = 50;
   let pendingRecent = [];        // queued rows while paused (deduped by ts)
   let recentPaused = false;      // user is hovering the table
+  let recentSeenTs = new Set();  // every ts considered (DOM-rendered OR filtered out)
+
+  const recentFilters = { search: '', client: '', model: '', status: '', method: '' };
+
+  const recentFilterActive = () =>
+    !!(recentFilters.search || recentFilters.client || recentFilters.model
+      || recentFilters.status || recentFilters.method);
+
+  const matchesRecentFilter = (r) => {
+    const f = recentFilters;
+    if (f.client && r.client !== f.client) return false;
+    if (f.model && (r.model || '') !== f.model) return false;
+    if (f.method && r.method !== f.method) return false;
+    if (f.status) {
+      const bucket = r.status >= 500 ? '5xx'
+        : r.status >= 400 ? '4xx'
+        : r.status >= 300 ? '3xx'
+        : '2xx';
+      if (bucket !== f.status) return false;
+    }
+    if (f.search) {
+      const q = f.search.toLowerCase();
+      const hay = ((r.client||'') + ' ' + (r.path||'') + ' ' + (r.model||'')
+        + ' ' + (r.userMessage||'')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  const fillSelectKeepingValue = (sel, values) => {
+    const cur = sel.value;
+    const placeholder = sel.firstElementChild ? sel.firstElementChild.outerHTML : '';
+    sel.innerHTML = placeholder
+      + values.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+    sel.value = values.includes(cur) ? cur : '';
+  };
+
+  const populateRecentFilterOptions = (data) => {
+    // Union with the full clients/models tables so dropdowns still list a
+    // client even if they haven't shown up in the last 50 requests yet.
+    const clientsSet = new Set();
+    const modelsSet = new Set();
+    for (const r of data.recent) {
+      if (r.client) clientsSet.add(r.client);
+      if (r.model) modelsSet.add(r.model);
+    }
+    for (const c of (data.clients || [])) if (c.name) clientsSet.add(c.name);
+    for (const m of (data.models  || [])) if (m.model) modelsSet.add(m.model);
+    fillSelectKeepingValue(
+      document.getElementById('rfClient'),
+      Array.from(clientsSet).sort(),
+    );
+    fillSelectKeepingValue(
+      document.getElementById('rfModel'),
+      Array.from(modelsSet).sort(),
+    );
+  };
+
+  const updateRecentCount = (data) => {
+    const el = document.getElementById('rfCount');
+    if (!el) return;
+    const total = data ? data.recent.length : 0;
+    if (!total) { el.textContent = ''; el.classList.remove('active'); return; }
+    if (recentFilterActive()) {
+      const shown = data.recent.filter(matchesRecentFilter).length;
+      el.textContent = 'showing ' + shown + ' of ' + total;
+      el.classList.add('active');
+    } else {
+      el.textContent = total + ' rows';
+      el.classList.remove('active');
+    }
+  };
+
+  // Rebuild the table body from currentData under the active filter.
+  // Reseeds recentSeenTs so the next refresh's diff path stays consistent.
+  const applyRecentFilters = () => {
+    if (!currentData) return;
+    const body = document.getElementById('recentBody');
+    if (!body) return;
+    recentSeenTs = new Set();
+    pendingRecent = [];
+    body.innerHTML = '';
+    const ordered = currentData.recent.slice().reverse();
+    for (const r of ordered) {
+      recentSeenTs.add(String(r.ts));
+      if (matchesRecentFilter(r)) body.appendChild(buildRecentRow(r));
+    }
+    const scroll = document.getElementById('recentScroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    updatePauseHint();
+    updateRecentCount(currentData);
+  };
 
   // Refresh just the relative-time cells without touching the rest of the row,
   // so an idle viewer sees "1m ago" tick to "2m ago" without the whole table
@@ -870,10 +1013,12 @@ export function renderDashboard(): string {
     // viewport alone (appending at the bottom doesn't shift content above).
     const wasAtBottom = !scroll
       || (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight) < 32;
-    // Append oldest-first so the newest ends up at the bottom.
+    // Append oldest-first so the newest ends up at the bottom. Drop rows that
+    // don't match the active filter — they stay tracked in recentSeenTs so we
+    // don't keep re-evaluating them on every refresh tick.
     pendingRecent.sort((a, b) => a.ts - b.ts);
     for (const r of pendingRecent) {
-      body.appendChild(buildRecentRow(r));
+      if (matchesRecentFilter(r)) body.appendChild(buildRecentRow(r));
     }
     pendingRecent = [];
     while (body.children.length > RECENT_KEEP) {
@@ -883,6 +1028,7 @@ export function renderDashboard(): string {
       scroll.scrollTop = scroll.scrollHeight;
     }
     updatePauseHint();
+    updateRecentCount(currentData);
   };
 
   const updatePauseHint = () => {
@@ -899,20 +1045,30 @@ export function renderDashboard(): string {
 
   const renderRecent = (data) => {
     const host = document.getElementById('recentTable');
+    const filterBar = document.getElementById('recentFilters');
     if (!data.recent.length) {
       host.innerHTML = '<div class="empty">No requests yet</div>';
       pendingRecent = [];
+      recentSeenTs = new Set();
+      if (filterBar) filterBar.style.display = 'none';
       return;
     }
+
+    if (filterBar) filterBar.style.display = '';
+    populateRecentFilterOptions(data);
 
     let body = document.getElementById('recentBody');
     if (!body) {
       host.innerHTML = RECENT_TABLE_HTML;
       body = document.getElementById('recentBody');
       // Initial paint: server returns newest-first, but we want chat-style
-      // (newest at the bottom), so reverse before appending.
+      // (newest at the bottom), so reverse before appending. Apply the active
+      // filter as we go; non-matching rows are still tracked in recentSeenTs.
       const ordered = data.recent.slice().reverse();
-      for (const r of ordered) body.appendChild(buildRecentRow(r));
+      for (const r of ordered) {
+        recentSeenTs.add(String(r.ts));
+        if (matchesRecentFilter(r)) body.appendChild(buildRecentRow(r));
+      }
 
       // Pause refresh while the user is interacting so the table stops moving
       // under their cursor. Resume + flush when they leave.
@@ -921,27 +1077,29 @@ export function renderDashboard(): string {
       scroll.addEventListener('mouseleave', () => { recentPaused = false; flushPendingRecent(); });
       // Start anchored at the bottom so the latest request is in view.
       scroll.scrollTop = scroll.scrollHeight;
+      updateRecentCount(data);
       return;
     }
 
-    // Diff against what's already in the DOM. ts is monotonic per-request and
-    // unique enough at our request rate to use as a row key.
-    const known = new Set(
-      Array.from(body.children).map(tr => tr.dataset.ts),
-    );
-    for (const r of pendingRecent) known.add(String(r.ts));
-    const fresh = data.recent.filter(r => !known.has(String(r.ts)));
+    // Diff against everything we've already considered (DOM rows + filtered-out
+    // rows + queued rows). ts is monotonic per-request and unique enough at our
+    // request rate to use as a row key.
+    for (const r of pendingRecent) recentSeenTs.add(String(r.ts));
+    const fresh = data.recent.filter(r => !recentSeenTs.has(String(r.ts)));
     if (!fresh.length) {
       tickAgoCells();
       updatePauseHint();
+      updateRecentCount(data);
       return;
     }
 
+    for (const r of fresh) recentSeenTs.add(String(r.ts));
     pendingRecent.push(...fresh);
     if (recentPaused) {
       // Hold back — let the user finish reading. Hint shows the backlog.
       tickAgoCells();
       updatePauseHint();
+      updateRecentCount(data);
     } else {
       flushPendingRecent();
       tickAgoCells();
@@ -978,6 +1136,38 @@ export function renderDashboard(): string {
   document.getElementById('rangeSel').addEventListener('change', () => {
     if (currentData) renderCharts(currentData);
   });
+
+  // ── Recent requests filter bar ──
+  // All filters operate client-side on the 50-row window the server returns,
+  // so we can swap filters without re-querying.
+  (() => {
+    const onChange = () => {
+      recentFilters.search = document.getElementById('rfSearch').value.trim();
+      recentFilters.client = document.getElementById('rfClient').value;
+      recentFilters.model  = document.getElementById('rfModel').value;
+      recentFilters.status = document.getElementById('rfStatus').value;
+      recentFilters.method = document.getElementById('rfMethod').value;
+      applyRecentFilters();
+    };
+    let searchTimer = null;
+    const onSearchInput = () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(onChange, 120);
+    };
+    document.getElementById('rfSearch').addEventListener('input', onSearchInput);
+    document.getElementById('rfClient').addEventListener('change', onChange);
+    document.getElementById('rfModel').addEventListener('change', onChange);
+    document.getElementById('rfStatus').addEventListener('change', onChange);
+    document.getElementById('rfMethod').addEventListener('change', onChange);
+    document.getElementById('rfClear').addEventListener('click', () => {
+      document.getElementById('rfSearch').value = '';
+      document.getElementById('rfClient').value = '';
+      document.getElementById('rfModel').value = '';
+      document.getElementById('rfStatus').value = '';
+      document.getElementById('rfMethod').value = '';
+      onChange();
+    });
+  })();
 
   // ── Clients management ──
   const renderLimitCell = (c) => {
