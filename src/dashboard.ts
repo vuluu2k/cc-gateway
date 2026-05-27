@@ -582,21 +582,28 @@ export function renderDashboard(): string {
       <h3>Client created · <span id="successName"></span></h3>
       <p class="meta" style="margin:0 0 4px">File <code id="successFile"></code> has been downloaded. Send it to the user and follow the steps below.</p>
 
-      <p class="step-label"><span class="num">1</span>Run the launcher (quick test)</p>
+      <p class="step-label"><span class="num">1</span>macOS — if Gatekeeper blocks the file</p>
+      <p class="meta" style="margin:0 0 6px">Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.</p>
+      <div class="snippet-block">
+        <pre id="xattrCmd"></pre>
+        <button id="copyXattrBtn" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label"><span class="num">2</span>Run the launcher (quick test)</p>
       <p class="meta" style="margin:0 0 6px">Make it executable and start Claude Code through the gateway.</p>
       <div class="snippet-block">
         <pre id="successCmd"></pre>
         <button id="copyCmdBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
-      <p class="step-label"><span class="num">2</span>Install system-wide as <code>ccg</code></p>
+      <p class="step-label"><span class="num">3</span>Install system-wide as <code>ccg</code></p>
       <p class="meta" style="margin:0 0 6px">Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.</p>
       <div class="snippet-block">
         <pre id="installCmd"></pre>
         <button id="copyInstallBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
-      <p class="step-label"><span class="num">3</span>Hijack <code>claude</code> → gateway (optional)</p>
+      <p class="step-label"><span class="num">4</span>Hijack <code>claude</code> → gateway (optional)</p>
       <p class="meta" style="margin:0 0 6px">Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.</p>
       <div class="snippet-block">
         <pre id="hijackCmd">ccg hijack</pre>
@@ -615,12 +622,6 @@ export function renderDashboard(): string {
         <code>ccg native [args]</code><span>Run native <code>claude</code> once, bypassing the gateway (no permanent change).</span>
         <code>ccg status</code><span>Show the configured gateway URL, hijack state, and a health check.</span>
         <code>ccg help</code><span>Print the same command list inside the terminal.</span>
-      </div>
-
-      <p class="step-label">macOS — if Gatekeeper blocks the file</p>
-      <div class="snippet-block">
-        <pre id="xattrCmd"></pre>
-        <button id="copyXattrBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
       <p class="meta" style="margin:14px 0 0;font-size:12px">
