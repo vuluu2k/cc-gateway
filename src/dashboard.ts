@@ -539,10 +539,7 @@ export function renderDashboard(): string {
         <p style="margin:0 0 10px"><strong>By model</strong> — per-model totals: calls, input/output/cache tokens, and cost. Cost uses Anthropic public list prices.</p>
         <p style="margin:0 0 10px"><strong>Clients</strong> — every entry under <code>auth.tokens</code>, with their lifetime calls / tokens / cost. Click <strong>+ Add client</strong> to generate a token, append it to <code>config.yaml</code>, and download a launcher script.</p>
         <p style="margin:0 0 10px"><strong>Recent requests</strong> — last 50 requests with model, tokens, cost, and duration. New rows stream in at the top; updates pause while you're hovering so the view doesn't jump.</p>
-        <p style="margin:0">After downloading <code>cc-&lt;name&gt;</code>, send it to the user. They run:</p>
-<pre style="background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:12px;overflow-x:auto;margin:8px 0 0">chmod +x cc-&lt;name&gt;
-./cc-&lt;name&gt; install      # install as 'ccg' system-wide (optional)
-./cc-&lt;name&gt;              # or run directly without installing</pre>
+        <p style="margin:0">Pick a target platform — <strong>macOS / Linux</strong> downloads <code>cc-&lt;name&gt;</code> (bash), <strong>Windows</strong> downloads <code>cc-&lt;name&gt;.ps1</code> (PowerShell). The "Client created" panel shows OS-specific install steps to copy into a terminal.</p>
       </div>
     </details>
   </div>
@@ -563,6 +560,11 @@ export function renderDashboard(): string {
         <option value="https">https</option>
         <option value="http">http</option>
       </select>
+      <label>Target platform</label>
+      <select id="cPlatform">
+        <option value="unix">macOS / Linux (bash)</option>
+        <option value="windows">Windows (PowerShell)</option>
+      </select>
       <label>Cost limit (USD) — optional, 0 = unlimited</label>
       <input id="cLimit" type="number" min="0" step="0.01" placeholder="0" autocomplete="off" />
       <label>Limit window</label>
@@ -582,29 +584,29 @@ export function renderDashboard(): string {
       <h3>Client created · <span id="successName"></span></h3>
       <p class="meta" style="margin:0 0 4px">File <code id="successFile"></code> has been downloaded. Send it to the user and follow the steps below.</p>
 
-      <p class="step-label"><span class="num">1</span>macOS — if Gatekeeper blocks the file</p>
-      <p class="meta" style="margin:0 0 6px">Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.</p>
+      <p class="step-label" id="step1Label"><span class="num">1</span>macOS — if Gatekeeper blocks the file</p>
+      <p class="meta" id="step1Meta" style="margin:0 0 6px">Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.</p>
       <div class="snippet-block">
         <pre id="xattrCmd"></pre>
         <button id="copyXattrBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
       <p class="step-label"><span class="num">2</span>Run the launcher (quick test)</p>
-      <p class="meta" style="margin:0 0 6px">Make it executable and start Claude Code through the gateway.</p>
+      <p class="meta" id="step2Meta" style="margin:0 0 6px">Make it executable and start Claude Code through the gateway.</p>
       <div class="snippet-block">
         <pre id="successCmd"></pre>
         <button id="copyCmdBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
       <p class="step-label"><span class="num">3</span>Install system-wide as <code>ccg</code></p>
-      <p class="meta" style="margin:0 0 6px">Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.</p>
+      <p class="meta" id="step3Meta" style="margin:0 0 6px">Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.</p>
       <div class="snippet-block">
         <pre id="installCmd"></pre>
         <button id="copyInstallBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
       <p class="step-label"><span class="num">4</span>Hijack <code>claude</code> → gateway (optional)</p>
-      <p class="meta" style="margin:0 0 6px">Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.</p>
+      <p class="meta" id="step4Meta" style="margin:0 0 6px">Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.</p>
       <div class="snippet-block">
         <pre id="hijackCmd">ccg hijack</pre>
         <button id="copyHijackBtn" type="button" class="copy-btn">Copy</button>
@@ -1251,6 +1253,7 @@ export function renderDashboard(): string {
     document.getElementById('cName').value = '';
     document.getElementById('cAddr').value = location.host;
     document.getElementById('cScheme').value = location.protocol === 'http:' ? 'http' : 'https';
+    document.getElementById('cPlatform').value = 'unix';
     document.getElementById('cLimit').value = '';
     document.getElementById('cLimitPeriod').value = 'lifetime';
     showError(null);
@@ -1262,19 +1265,50 @@ export function renderDashboard(): string {
   };
   const closeModal = () => { document.getElementById('addClientModal').style.display = 'none'; };
 
-  const showSuccess = (name) => {
+  const showSuccess = (name, platform) => {
     document.getElementById('modalForm').style.display = 'none';
     const sucEl = document.getElementById('modalSuccess');
     sucEl.style.display = 'block';
     modalBoxEl().classList.add('wide');
     document.getElementById('successName').textContent = name;
-    document.getElementById('successFile').textContent = 'cc-' + name;
-    document.getElementById('successCmd').textContent =
-      'chmod +x cc-' + name + ' && ./cc-' + name;
-    document.getElementById('installCmd').textContent =
-      'chmod +x cc-' + name + ' && ./cc-' + name + ' install';
-    document.getElementById('xattrCmd').textContent =
-      'xattr -d com.apple.quarantine cc-' + name;
+    const isWin = platform === 'windows';
+    const fname = isWin ? 'cc-' + name + '.ps1' : 'cc-' + name;
+    document.getElementById('successFile').textContent = fname;
+    if (isWin) {
+      document.getElementById('step1Label').innerHTML =
+        '<span class="num">1</span>Windows — allow PowerShell scripts &amp; unblock file';
+      document.getElementById('step1Meta').innerHTML =
+        'One-time per machine: enable <code>RemoteSigned</code> policy for your user, then strip the Mark-of-the-Web from the downloaded file.';
+      document.getElementById('xattrCmd').textContent =
+        'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\' + fname;
+      document.getElementById('step2Meta').textContent =
+        'Run the launcher with PowerShell to verify the gateway connection.';
+      document.getElementById('successCmd').textContent = '.\\' + fname;
+      document.getElementById('step3Meta').innerHTML =
+        'Copies the launcher into <code>%LOCALAPPDATA%\\ccg-bin</code> and adds it to your user <code>PATH</code> (open a new terminal afterwards).';
+      document.getElementById('installCmd').textContent = '.\\' + fname + ' install';
+      document.getElementById('step4Meta').innerHTML =
+        'Adds <code>Set-Alias claude ccg</code> to your PowerShell profile so every <code>claude</code> invocation routes through this gateway. New PowerShell windows pick it up; reload the current one with <code>. $PROFILE</code>. Undo with <code>ccg release</code>.';
+      document.getElementById('hijackCmd').textContent = 'ccg hijack';
+    } else {
+      document.getElementById('step1Label').innerHTML =
+        '<span class="num">1</span>macOS — if Gatekeeper blocks the file';
+      document.getElementById('step1Meta').textContent =
+        'Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.';
+      document.getElementById('xattrCmd').textContent =
+        'xattr -d com.apple.quarantine ' + fname;
+      document.getElementById('step2Meta').textContent =
+        'Make it executable and start Claude Code through the gateway.';
+      document.getElementById('successCmd').textContent =
+        'chmod +x ' + fname + ' && ./' + fname;
+      document.getElementById('step3Meta').innerHTML =
+        'Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.';
+      document.getElementById('installCmd').textContent =
+        'chmod +x ' + fname + ' && ./' + fname + ' install';
+      document.getElementById('step4Meta').innerHTML =
+        'Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.';
+      document.getElementById('hijackCmd').textContent = 'ccg hijack';
+    }
   };
 
   const wireCopyButton = (btnId, sourceId) => {
@@ -1304,6 +1338,7 @@ export function renderDashboard(): string {
     const name = document.getElementById('cName').value.trim();
     const gateway_addr = document.getElementById('cAddr').value.trim();
     const scheme = document.getElementById('cScheme').value;
+    const platform = document.getElementById('cPlatform').value;
     const limitRaw = document.getElementById('cLimit').value.trim();
     const cost_limit_usd = limitRaw === '' ? null : Number(limitRaw);
     const cost_limit_period = document.getElementById('cLimitPeriod').value;
@@ -1318,7 +1353,7 @@ export function renderDashboard(): string {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, gateway_addr, scheme, cost_limit_usd, cost_limit_period }),
+        body: JSON.stringify({ name, gateway_addr, scheme, platform, cost_limit_usd, cost_limit_period }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1329,12 +1364,12 @@ export function renderDashboard(): string {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'cc-' + name;
+      a.download = platform === 'windows' ? 'cc-' + name + '.ps1' : 'cc-' + name;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      showSuccess(name);
+      showSuccess(name, platform);
       loadClients();
     } finally {
       submitBtn.disabled = false;

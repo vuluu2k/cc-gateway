@@ -164,6 +164,200 @@ export interface LauncherOptions {
   scheme: 'http' | 'https'
 }
 
+export function buildPowerShellLauncherScript(opts: LauncherOptions): string {
+  const tlsBypass =
+    opts.scheme === 'https'
+      ? '\n# Accept self-signed TLS cert from gateway\n$env:NODE_TLS_REJECT_UNAUTHORIZED = "0"\n'
+      : ''
+  return `# CC Gateway Client Launcher (Windows / PowerShell)
+#
+# Usage:
+#   .\\cc-${opts.name}.ps1                  Start Claude Code through gateway
+#   .\\cc-${opts.name}.ps1 --print "hi"     Single-shot mode
+#   .\\cc-${opts.name}.ps1 install          Install as 'ccg' system command (user PATH)
+#   .\\cc-${opts.name}.ps1 uninstall        Remove 'ccg' and restore native claude
+#   .\\cc-${opts.name}.ps1 hijack           Alias claude -> ccg in PowerShell profile
+#   .\\cc-${opts.name}.ps1 release          Undo hijack
+#   .\\cc-${opts.name}.ps1 native           Run native claude (bypass gateway, one-time)
+#   .\\cc-${opts.name}.ps1 status           Show gateway URL + hijack state + health
+[CmdletBinding()]
+param([Parameter(ValueFromRemainingArguments=$true)][string[]]$RestArgs)
+
+$GatewayUrl  = "${opts.scheme}://${opts.gatewayAddr}"
+$ClientToken = "${opts.token}"
+${tlsBypass}
+$InstallDir  = Join-Path $env:LOCALAPPDATA "ccg-bin"
+$InstallPs1  = Join-Path $InstallDir "ccg.ps1"
+$InstallCmd  = Join-Path $InstallDir "ccg.cmd"
+$ProfilePath = $PROFILE.CurrentUserAllHosts
+$AliasTag    = "# cc-gateway alias"
+
+function Add-ToUserPath {
+  param([string]$Dir)
+  $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+  if (-not $userPath) { $userPath = "" }
+  $parts = $userPath -split ';' | Where-Object { $_ -ne "" }
+  if ($parts -notcontains $Dir) {
+    $new = (@($Dir) + $parts) -join ';'
+    [Environment]::SetEnvironmentVariable("PATH", $new, "User")
+    return $true
+  }
+  return $false
+}
+
+function Test-AliasInProfile {
+  if (-not (Test-Path $ProfilePath)) { return $false }
+  return [bool](Select-String -Path $ProfilePath -Pattern ([regex]::Escape($AliasTag)) -Quiet -ErrorAction SilentlyContinue)
+}
+
+function Remove-AliasFromProfile {
+  if (-not (Test-Path $ProfilePath)) { return }
+  (Get-Content $ProfilePath) | Where-Object { $_ -notlike "*$AliasTag*" } | Set-Content $ProfilePath
+}
+
+function Invoke-Install {
+  if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir | Out-Null }
+  Copy-Item -Path $PSCommandPath -Destination $InstallPs1 -Force
+  $cmdContent = @'
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ccg.ps1" %*
+'@
+  Set-Content -Path $InstallCmd -Value $cmdContent -Encoding ASCII
+  $added = Add-ToUserPath $InstallDir
+  Write-Host "Installed as 'ccg' at $InstallDir."
+  if ($added) {
+    Write-Host ""
+    Write-Host "Added $InstallDir to your user PATH. Open a NEW terminal for 'ccg' to be found."
+  }
+  Write-Host ""
+  Write-Host "  ccg              Start Claude Code through gateway"
+  Write-Host "  ccg hijack       Make 'claude' also go through gateway"
+  Write-Host "  ccg release      Restore 'claude' to native"
+  Write-Host "  ccg status       Show gateway connection status"
+  Write-Host "  ccg help         Show this help"
+}
+
+function Invoke-Uninstall {
+  Remove-Item -Path $InstallPs1 -ErrorAction SilentlyContinue
+  Remove-Item -Path $InstallCmd -ErrorAction SilentlyContinue
+  if (Test-AliasInProfile) { Remove-AliasFromProfile }
+  Write-Host "Removed. Native 'claude' restored."
+}
+
+function Invoke-Hijack {
+  if (Test-AliasInProfile) {
+    Write-Host "Already active. Run 'ccg release' to undo."
+    return
+  }
+  $dir = Split-Path -Parent $ProfilePath
+  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  if (-not (Test-Path $ProfilePath)) { New-Item -ItemType File -Path $ProfilePath -Force | Out-Null }
+  Add-Content -Path $ProfilePath -Value "Set-Alias claude ccg $AliasTag"
+  Write-Host "Done. 'claude' now goes through gateway."
+  Write-Host "  New PowerShell terminals: automatic."
+  Write-Host '  This terminal: reopen or run: . $PROFILE'
+  Write-Host "  Undo anytime: ccg release"
+}
+
+function Invoke-Release {
+  if (Test-AliasInProfile) {
+    Remove-AliasFromProfile
+    Remove-Item Alias:claude -ErrorAction SilentlyContinue
+    Write-Host "Done. 'claude' is back to native."
+  } else {
+    Write-Host "Nothing to undo - 'claude' is already native."
+  }
+}
+
+function Invoke-Native {
+  $rest = if ($RestArgs.Count -gt 1) { $RestArgs[1..($RestArgs.Count - 1)] } else { @() }
+  $app = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue
+  if (-not $app) { Write-Error "claude not found"; exit 1 }
+  & $app.Source @rest
+  exit $LASTEXITCODE
+}
+
+function Test-GatewayHealth {
+  try {
+    $params = @{ Uri = "$GatewayUrl/_health"; TimeoutSec = 3; UseBasicParsing = $true; ErrorAction = 'Stop' }
+    if ($PSVersionTable.PSVersion.Major -ge 6) { $params.SkipCertificateCheck = $true }
+    else { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
+    $r = Invoke-WebRequest @params
+    return ($r.StatusCode -lt 500)
+  } catch { return $false }
+}
+
+function Invoke-Status {
+  Write-Host "Gateway:  $GatewayUrl"
+  if (Test-AliasInProfile) {
+    Write-Host "Hijack:   ON  (claude -> gateway)"
+  } else {
+    Write-Host "Hijack:   OFF (claude = native)"
+  }
+  if (Test-GatewayHealth) { Write-Host "Health:   OK" } else { Write-Host "Health:   UNREACHABLE" }
+}
+
+function Invoke-Help {
+  Write-Host "ccg - Claude Code Gateway Client (Windows)"
+  Write-Host ""
+  Write-Host "Usage:"
+  Write-Host "  ccg                  Start Claude Code through gateway"
+  Write-Host "  ccg [claude args]    Pass any arguments to Claude Code"
+  Write-Host "  ccg --print 'hi'     Single-shot mode"
+  Write-Host ""
+  Write-Host "Setup:"
+  Write-Host "  ccg install          Install as 'ccg' system command (user PATH)"
+  Write-Host "  ccg uninstall        Remove 'ccg' and clean up"
+  Write-Host ""
+  Write-Host "Routing:"
+  Write-Host "  ccg hijack           Make 'claude' go through gateway"
+  Write-Host "  ccg release          Restore 'claude' to native"
+  Write-Host "  ccg native [args]    Run native claude once (bypass gateway)"
+  Write-Host ""
+  Write-Host "Info:"
+  Write-Host "  ccg status           Show gateway and hijack status"
+  Write-Host "  ccg help             Show this help"
+}
+
+# Subcommand dispatch
+if ($RestArgs -and $RestArgs.Count -gt 0) {
+  switch ($RestArgs[0]) {
+    'install'   { Invoke-Install; exit 0 }
+    'uninstall' { Invoke-Uninstall; exit 0 }
+    'hijack'    { Invoke-Hijack; exit 0 }
+    'release'   { Invoke-Release; exit 0 }
+    'native'    { Invoke-Native }
+    'status'    { Invoke-Status; exit 0 }
+    'help'      { Invoke-Help; exit 0 }
+    '--help'    { Invoke-Help; exit 0 }
+    '-h'        { Invoke-Help; exit 0 }
+  }
+}
+
+# Main: launch through gateway
+$claudeApp = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue
+if (-not $claudeApp) {
+  Write-Error "Error: 'claude' not found. Install Claude Code first:"
+  Write-Error "  npm install -g @anthropic-ai/claude-code"
+  exit 1
+}
+
+$env:ANTHROPIC_API_KEY = $ClientToken
+$env:ANTHROPIC_BASE_URL = $GatewayUrl
+$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+$env:CLAUDE_CODE_ATTRIBUTION_HEADER = "false"
+
+if (-not (Test-GatewayHealth)) {
+  Write-Host "Warning: Gateway at $GatewayUrl is not reachable."
+  Write-Host "Make sure the gateway is running."
+  Write-Host ""
+}
+
+& $claudeApp.Source @RestArgs
+exit $LASTEXITCODE
+`
+}
+
 export function buildLauncherScript(opts: LauncherOptions): string {
   const tlsBypass =
     opts.scheme === 'https'

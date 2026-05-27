@@ -21,7 +21,7 @@ import {
   clearCookieHeader,
   getSessionFromRequest,
 } from './session.js'
-import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript } from './clients.js'
+import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
 
 const USER_MESSAGE_MAX = 200
@@ -595,6 +595,7 @@ async function handleDashboardArea(
         gateway_addr?: string
         scheme?: string
         format?: string
+        platform?: string
         cost_limit_usd?: number | null
         cost_limit_period?: CostLimitPeriod | null
       }
@@ -628,20 +629,26 @@ async function handleDashboardArea(
       }
       reloadAuthFromConfig()
       log('info', `User "${session.u}" added client "${entry.name}"`)
-      const script = buildLauncherScript({
+      const isWindows = payload.platform === 'windows'
+      const opts = {
         name: entry.name,
         token: entry.token,
         gatewayAddr,
-        scheme,
-      })
+        scheme: scheme as 'http' | 'https',
+      }
+      const script = isWindows ? buildPowerShellLauncherScript(opts) : buildLauncherScript(opts)
       if (payload.format === 'json') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ name: entry.name, token: entry.token, script }))
         return
       }
+      const filename = isWindows ? `cc-${entry.name}.ps1` : `cc-${entry.name}`
+      const ctype = isWindows
+        ? 'text/plain; charset=utf-8'
+        : 'application/x-shellscript; charset=utf-8'
       res.writeHead(200, {
-        'Content-Type': 'application/x-shellscript; charset=utf-8',
-        'Content-Disposition': `attachment; filename="cc-${entry.name}"`,
+        'Content-Type': ctype,
+        'Content-Disposition': `attachment; filename="${filename}"`,
         'X-Client-Token': entry.token,
       })
       res.end(script)
