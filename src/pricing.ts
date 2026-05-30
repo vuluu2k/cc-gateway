@@ -11,6 +11,7 @@ export interface Pricing {
 
 const RATES: Record<string, Pricing> = {
   // Claude 4.x family (current)
+  'claude-opus-4-8':       { input:  5.00, output: 25.00, cacheRead: 0.50, cacheWrite:  6.25 },
   'claude-opus-4-7':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
   'claude-opus-4-6':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
   'claude-opus-4-5':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
@@ -32,7 +33,7 @@ function lookupRate(model: string): Pricing {
     if (key === id || key.startsWith(id + '-')) return RATES[id]
   }
   // Family fallback
-  if (key.includes('opus'))   return RATES['claude-opus-4-7']
+  if (key.includes('opus'))   return RATES['claude-opus-4-8']
   if (key.includes('haiku'))  return RATES['claude-haiku-4-5']
   return RATES['claude-sonnet-4-7']
 }
