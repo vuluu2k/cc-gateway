@@ -177,7 +177,9 @@ export function buildPowerShellLauncherScript(opts: LauncherOptions): string {
 #   .\\cc-${opts.name}.ps1 install          Install as 'ccg' system command (user PATH)
 #   .\\cc-${opts.name}.ps1 uninstall        Remove 'ccg' and restore native claude
 #   .\\cc-${opts.name}.ps1 hijack           Alias claude -> ccg in PowerShell profile
-#   .\\cc-${opts.name}.ps1 release          Undo hijack
+#   .\\cc-${opts.name}.ps1 release          Undo shell hijack
+#   .\\cc-${opts.name}.ps1 hijack-gui       Persist user env vars so VS Code / Cursor extension uses gateway
+#   .\\cc-${opts.name}.ps1 release-gui      Undo GUI hijack
 #   .\\cc-${opts.name}.ps1 native           Run native claude (bypass gateway, one-time)
 #   .\\cc-${opts.name}.ps1 status           Show gateway URL + hijack state + health
 [CmdletBinding()]
@@ -231,16 +233,45 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ccg.ps1" %*
   }
   Write-Host ""
   Write-Host "  ccg              Start Claude Code through gateway"
-  Write-Host "  ccg hijack       Make 'claude' also go through gateway"
-  Write-Host "  ccg release      Restore 'claude' to native"
+  Write-Host "  ccg hijack       Make shell 'claude' also go through gateway"
+  Write-Host "  ccg hijack-gui   Make VS Code / Cursor extension go through gateway"
+  Write-Host "  ccg release      Restore shell 'claude' to native"
+  Write-Host "  ccg release-gui  Restore GUI extension to native"
   Write-Host "  ccg status       Show gateway connection status"
   Write-Host "  ccg help         Show this help"
+}
+
+function Test-GuiHijack {
+  $url = [Environment]::GetEnvironmentVariable("ANTHROPIC_BASE_URL", "User")
+  return (-not [string]::IsNullOrEmpty($url))
+}
+
+function Invoke-HijackGui {
+  [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $ClientToken, "User")
+  [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $GatewayUrl, "User")
+  Write-Host "Done. GUI apps (VS Code / Cursor) will route through gateway."
+  Write-Host "  Fully Quit and reopen VS Code / Cursor for the extension to pick up the env vars."
+  Write-Host "  Undo: ccg release-gui"
+}
+
+function Invoke-ReleaseGui {
+  if (Test-GuiHijack) {
+    [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $null, "User")
+    [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $null, "User")
+    Write-Host "Done. GUI env vars removed. Restart VS Code / Cursor."
+  } else {
+    Write-Host "Nothing to undo - GUI hijack not active."
+  }
 }
 
 function Invoke-Uninstall {
   Remove-Item -Path $InstallPs1 -ErrorAction SilentlyContinue
   Remove-Item -Path $InstallCmd -ErrorAction SilentlyContinue
   if (Test-AliasInProfile) { Remove-AliasFromProfile }
+  if (Test-GuiHijack) {
+    [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $null, "User")
+    [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $null, "User")
+  }
   Write-Host "Removed. Native 'claude' restored."
 }
 
@@ -290,9 +321,14 @@ function Test-GatewayHealth {
 function Invoke-Status {
   Write-Host "Gateway:  $GatewayUrl"
   if (Test-AliasInProfile) {
-    Write-Host "Hijack:   ON  (claude -> gateway)"
+    Write-Host "Shell:    ON  (claude -> ccg)"
   } else {
-    Write-Host "Hijack:   OFF (claude = native)"
+    Write-Host "Shell:    OFF (claude = native)"
+  }
+  if (Test-GuiHijack) {
+    Write-Host "GUI:      ON  (VS Code / Cursor -> gateway)"
+  } else {
+    Write-Host "GUI:      OFF (VS Code / Cursor uses native)"
   }
   if (Test-GatewayHealth) { Write-Host "Health:   OK" } else { Write-Host "Health:   UNREACHABLE" }
 }
@@ -309,10 +345,14 @@ function Invoke-Help {
   Write-Host "  ccg install          Install as 'ccg' system command (user PATH)"
   Write-Host "  ccg uninstall        Remove 'ccg' and clean up"
   Write-Host ""
-  Write-Host "Routing:"
-  Write-Host "  ccg hijack           Make 'claude' go through gateway"
-  Write-Host "  ccg release          Restore 'claude' to native"
+  Write-Host "Routing (shell):"
+  Write-Host "  ccg hijack           Make 'claude' (in terminal) go through gateway"
+  Write-Host "  ccg release          Restore shell 'claude' to native"
   Write-Host "  ccg native [args]    Run native claude once (bypass gateway)"
+  Write-Host ""
+  Write-Host "Routing (GUI extension):"
+  Write-Host "  ccg hijack-gui       Make VS Code / Cursor extension use gateway"
+  Write-Host "  ccg release-gui      Restore GUI extension to native"
   Write-Host ""
   Write-Host "Info:"
   Write-Host "  ccg status           Show gateway and hijack status"
@@ -324,8 +364,10 @@ if ($RestArgs -and $RestArgs.Count -gt 0) {
   switch ($RestArgs[0]) {
     'install'   { Invoke-Install; exit 0 }
     'uninstall' { Invoke-Uninstall; exit 0 }
-    'hijack'    { Invoke-Hijack; exit 0 }
-    'release'   { Invoke-Release; exit 0 }
+    'hijack'      { Invoke-Hijack; exit 0 }
+    'release'     { Invoke-Release; exit 0 }
+    'hijack-gui'  { Invoke-HijackGui; exit 0 }
+    'release-gui' { Invoke-ReleaseGui; exit 0 }
     'native'    { Invoke-Native }
     'status'    { Invoke-Status; exit 0 }
     'help'      { Invoke-Help; exit 0 }
@@ -373,6 +415,10 @@ export function buildLauncherScript(opts: LauncherOptions): string {
 #   ./cc-${opts.name} --print "hello"    Single-shot mode
 #   ./cc-${opts.name} install            Install as 'ccg' command system-wide
 #   ./cc-${opts.name} uninstall          Remove 'ccg' and restore native claude
+#   ./cc-${opts.name} hijack             Alias claude -> ccg in shell rc
+#   ./cc-${opts.name} release            Undo shell hijack
+#   ./cc-${opts.name} hijack-gui         Persist env vars so VS Code / Cursor extension uses gateway
+#   ./cc-${opts.name} release-gui        Undo GUI hijack
 #   ./cc-${opts.name} native             Run native claude (bypass gateway, one-time)
 GATEWAY_URL="${opts.scheme}://${opts.gatewayAddr}"
 CLIENT_TOKEN="${opts.token}"
@@ -419,8 +465,10 @@ case "$1" in
     esac
     echo ""
     echo "  ccg              Start Claude Code through gateway"
-    echo "  ccg hijack       Make 'claude' also go through gateway"
-    echo "  ccg release      Restore 'claude' to native"
+    echo "  ccg hijack       Make shell 'claude' also go through gateway"
+    echo "  ccg hijack-gui   Make VS Code / Cursor extension go through gateway"
+    echo "  ccg release      Restore shell 'claude' to native"
+    echo "  ccg release-gui  Restore GUI extension to native"
     echo "  ccg status       Show gateway connection status"
     echo "  ccg help         Show this help"
     exit 0
@@ -432,6 +480,21 @@ case "$1" in
       sed -i.bak "/$ALIAS_TAG/d" "$RC_FILE"
       rm -f "\${RC_FILE}.bak"
     fi
+    # Also clean up GUI hijack if present
+    case "$(uname -s)" in
+      Darwin)
+        PLIST_PATH="$HOME/Library/LaunchAgents/com.ccg.env.plist"
+        if [[ -f "$PLIST_PATH" ]]; then
+          launchctl unload "$PLIST_PATH" 2>/dev/null
+          rm -f "$PLIST_PATH"
+          launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
+          launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
+        fi
+        ;;
+      Linux)
+        rm -f "\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf"
+        ;;
+    esac
     echo "Removed. Native 'claude' restored."
     exit 0
     ;;
@@ -466,6 +529,90 @@ case "$1" in
     exit 0
     ;;
 
+  hijack-gui)
+    # Persist ANTHROPIC_* env vars so GUI apps (VS Code / Cursor) inherit them.
+    # macOS: LaunchAgent + launchctl setenv. Linux: ~/.config/environment.d/.
+    case "$(uname -s)" in
+      Darwin)
+        PLIST_PATH="$HOME/Library/LaunchAgents/com.ccg.env.plist"
+        mkdir -p "$(dirname "$PLIST_PATH")"
+        cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ccg.env</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>launchctl setenv ANTHROPIC_API_KEY '$CLIENT_TOKEN'; launchctl setenv ANTHROPIC_BASE_URL '$GATEWAY_URL'</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+        chmod 600 "$PLIST_PATH"
+        launchctl unload "$PLIST_PATH" 2>/dev/null
+        launchctl load "$PLIST_PATH"
+        launchctl setenv ANTHROPIC_API_KEY "$CLIENT_TOKEN"
+        launchctl setenv ANTHROPIC_BASE_URL "$GATEWAY_URL"
+        echo "Done. GUI apps (VS Code / Cursor) will route through gateway."
+        echo "  Fully Quit and reopen VS Code / Cursor (Cmd+Q, not just close window)."
+        echo "  Undo: ccg release-gui"
+        ;;
+      Linux)
+        ENV_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d"
+        ENV_FILE="$ENV_DIR/ccg.conf"
+        mkdir -p "$ENV_DIR"
+        cat > "$ENV_FILE" <<ENVCONF
+ANTHROPIC_API_KEY=$CLIENT_TOKEN
+ANTHROPIC_BASE_URL=$GATEWAY_URL
+ENVCONF
+        chmod 600 "$ENV_FILE"
+        echo "Done. Wrote $ENV_FILE."
+        echo "  Log out and back in (or restart) for the systemd user session to pick this up."
+        echo "  Undo: ccg release-gui"
+        ;;
+      *)
+        echo "hijack-gui is not supported on $(uname -s)."
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+
+  release-gui)
+    case "$(uname -s)" in
+      Darwin)
+        PLIST_PATH="$HOME/Library/LaunchAgents/com.ccg.env.plist"
+        if [[ -f "$PLIST_PATH" ]]; then
+          launchctl unload "$PLIST_PATH" 2>/dev/null
+          rm -f "$PLIST_PATH"
+        fi
+        launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
+        launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
+        echo "Done. GUI env vars removed. Restart VS Code / Cursor."
+        ;;
+      Linux)
+        ENV_FILE="\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf"
+        if [[ -f "$ENV_FILE" ]]; then
+          rm -f "$ENV_FILE"
+          echo "Done. Removed $ENV_FILE. Log out and back in for the change to take effect."
+        else
+          echo "Nothing to undo — GUI hijack not active."
+        fi
+        ;;
+      *)
+        echo "release-gui is not supported on $(uname -s)."
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+
   native)
     shift
     exec command claude "$@"
@@ -474,10 +621,20 @@ case "$1" in
   status)
     echo "Gateway:  $GATEWAY_URL"
     if grep -q "$ALIAS_TAG" "$RC_FILE" 2>/dev/null; then
-      echo "Hijack:   ON  (claude → gateway)"
+      echo "Shell:    ON  (claude → ccg)"
     else
-      echo "Hijack:   OFF (claude = native)"
+      echo "Shell:    OFF (claude = native)"
     fi
+    GUI_STATE="OFF (VS Code / Cursor uses native)"
+    case "$(uname -s)" in
+      Darwin)
+        [[ -f "$HOME/Library/LaunchAgents/com.ccg.env.plist" ]] && GUI_STATE="ON  (VS Code / Cursor → gateway)"
+        ;;
+      Linux)
+        [[ -f "\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf" ]] && GUI_STATE="ON  (VS Code / Cursor → gateway)"
+        ;;
+    esac
+    echo "GUI:      $GUI_STATE"
     HEALTH=$(curl -sk --max-time 3 "\${GATEWAY_URL}/_health" 2>/dev/null)
     if [[ -n "$HEALTH" ]]; then
       echo "Health:   OK"
@@ -499,10 +656,14 @@ case "$1" in
     echo "  ccg install            Install as 'ccg' system command"
     echo "  ccg uninstall          Remove 'ccg' and clean up"
     echo ""
-    echo "Routing:"
-    echo "  ccg hijack             Make 'claude' go through gateway"
-    echo "  ccg release            Restore 'claude' to native"
+    echo "Routing (shell):"
+    echo "  ccg hijack             Make 'claude' (in terminal) go through gateway"
+    echo "  ccg release            Restore shell 'claude' to native"
     echo "  ccg native [args]      Run native claude once (bypass gateway)"
+    echo ""
+    echo "Routing (GUI extension):"
+    echo "  ccg hijack-gui         Make VS Code / Cursor extension use gateway"
+    echo "  ccg release-gui        Restore GUI extension to native"
     echo ""
     echo "Info:"
     echo "  ccg status             Show gateway and hijack status"
