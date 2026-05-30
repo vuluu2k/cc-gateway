@@ -660,7 +660,51 @@ async function handleDashboardArea(
   }
 
   if (pathname.startsWith('/api/clients/')) {
-    const name = decodeURIComponent(pathname.slice('/api/clients/'.length))
+    const rest = pathname.slice('/api/clients/'.length)
+
+    // GET /api/clients/:name/launcher — re-download launcher for an existing
+    // client (reuses token from config.yaml — does not rotate it).
+    if (rest.endsWith('/launcher')) {
+      if (method !== 'GET') {
+        res.writeHead(405, { Allow: 'GET' })
+        res.end()
+        return
+      }
+      const name = decodeURIComponent(rest.slice(0, -('/launcher'.length)))
+      const existing = listClients().find((c) => c.name === name)
+      if (!existing) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'client not found' }))
+        return
+      }
+      const query = new URLSearchParams((req.url || '').split('?')[1] || '')
+      const platform = query.get('platform') || 'unix'
+      const scheme = query.get('scheme') === 'http' ? 'http' : 'https'
+      const gatewayAddr =
+        (query.get('gateway_addr') || '').trim() ||
+        (typeof req.headers.host === 'string' ? req.headers.host : 'localhost:8443')
+      const isWindows = platform === 'windows'
+      const opts = {
+        name: existing.name,
+        token: existing.token,
+        gatewayAddr,
+        scheme: scheme as 'http' | 'https',
+      }
+      const script = isWindows ? buildPowerShellLauncherScript(opts) : buildLauncherScript(opts)
+      const filename = isWindows ? `cc-${existing.name}.ps1` : `cc-${existing.name}`
+      const ctype = isWindows
+        ? 'text/plain; charset=utf-8'
+        : 'application/x-shellscript; charset=utf-8'
+      log('info', `User "${session.u}" re-downloaded launcher for client "${name}"`)
+      res.writeHead(200, {
+        'Content-Type': ctype,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      })
+      res.end(script)
+      return
+    }
+
+    const name = decodeURIComponent(rest)
     if (method === 'DELETE') {
       let removed = false
       try {

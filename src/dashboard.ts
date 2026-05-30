@@ -637,6 +637,30 @@ export function renderDashboard(): string {
   </div>
 </div>
 
+<div id="regenModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <h3>Re-download launcher · <span id="regenName"></span></h3>
+    <p class="meta" style="margin:0 0 16px">Generates a fresh launcher file using the existing token. Token, billing, and cost limit are <strong>not</strong> changed — use this to ship updates (e.g. <code>ccg hijack-gui</code>) to existing clients.</p>
+    <label>Gateway address</label>
+    <input id="rAddr" placeholder="ccg.example.com" autocomplete="off" />
+    <label>Scheme</label>
+    <select id="rScheme">
+      <option value="https">https</option>
+      <option value="http">http</option>
+    </select>
+    <label>Target platform</label>
+    <select id="rPlatform">
+      <option value="unix">macOS / Linux (bash)</option>
+      <option value="windows">Windows (PowerShell)</option>
+    </select>
+    <div id="rError" class="error" style="display:none;margin-top:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button id="rCancel" type="button">Cancel</button>
+      <button id="rSubmit" type="button" class="primary">Download</button>
+    </div>
+  </div>
+</div>
+
 <div id="limitModal" class="modal" style="display:none">
   <div class="modal-box">
     <h3>Set cost limit · <span id="limitName"></span></h3>
@@ -1200,6 +1224,7 @@ export function renderDashboard(): string {
           <button data-edit-limit="\${esc(c.name)}"
                   data-limit="\${c.cost_limit_usd || ''}"
                   data-period="\${esc(c.cost_limit_period || 'lifetime')}">Set limit</button>
+          <button data-regen="\${esc(c.name)}">Re-download</button>
           <button class="danger" data-del-client="\${esc(c.name)}">Delete</button>
         </td>
       </tr>\`).join('');
@@ -1231,6 +1256,9 @@ export function renderDashboard(): string {
           btn.getAttribute('data-period') || 'lifetime',
         );
       });
+    });
+    el.querySelectorAll('[data-regen]').forEach(btn => {
+      btn.addEventListener('click', () => openRegenModal(btn.getAttribute('data-regen')));
     });
   };
 
@@ -1436,6 +1464,65 @@ export function renderDashboard(): string {
   wireCopyButton('copyXattrBtn', 'xattrCmd');
   document.getElementById('addClientModal').addEventListener('click', (e) => {
     if (e.target.id === 'addClientModal') closeModal();
+  });
+
+  // Re-download launcher (for existing clients) — reuses the token in
+  // config.yaml, so billing/cost history are preserved.
+  let regenClientName = null;
+  const showRegenError = (msg) => {
+    const el = document.getElementById('rError');
+    if (msg) { el.textContent = msg; el.style.display = 'block'; }
+    else { el.style.display = 'none'; }
+  };
+  const openRegenModal = (name) => {
+    regenClientName = name;
+    document.getElementById('regenName').textContent = name;
+    document.getElementById('rAddr').value = location.host;
+    document.getElementById('rScheme').value = location.protocol === 'http:' ? 'http' : 'https';
+    document.getElementById('rPlatform').value = 'unix';
+    showRegenError(null);
+    document.getElementById('regenModal').style.display = 'flex';
+  };
+  const closeRegenModal = () => {
+    document.getElementById('regenModal').style.display = 'none';
+    regenClientName = null;
+  };
+  const submitRegen = async () => {
+    if (!regenClientName) return;
+    const platform = document.getElementById('rPlatform').value;
+    const scheme = document.getElementById('rScheme').value;
+    const addr = document.getElementById('rAddr').value.trim() || location.host;
+    const params = new URLSearchParams({ platform, scheme, gateway_addr: addr });
+    const url = '/api/clients/' + encodeURIComponent(regenClientName) + '/launcher?' + params.toString();
+    const btn = document.getElementById('rSubmit');
+    btn.disabled = true;
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showRegenError('Failed: ' + (err.error || res.status));
+        return;
+      }
+      const blob = await res.blob();
+      const fname = platform === 'windows' ? 'cc-' + regenClientName + '.ps1' : 'cc-' + regenClientName;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      closeRegenModal();
+    } catch (e) {
+      showRegenError('Network error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  document.getElementById('rCancel').addEventListener('click', closeRegenModal);
+  document.getElementById('rSubmit').addEventListener('click', submitRegen);
+  document.getElementById('regenModal').addEventListener('click', (e) => {
+    if (e.target.id === 'regenModal') closeRegenModal();
   });
 
   // Sidebar nav: highlight the section currently in view and keep page title
