@@ -597,6 +597,9 @@ export function renderDashboard(): string {
         <pre id="successCmd"></pre>
         <button id="copyCmdBtn" type="button" class="copy-btn">Copy</button>
       </div>
+      <p class="meta" style="margin:6px 0 0;color:var(--warn);font-size:12px">
+        ⚠ On first run, Claude Code asks <em>"Do you want to use this custom API?"</em> with options <strong>Yes</strong> / <strong>No (recommended)</strong>. Choose <strong>Yes</strong> — picking <em>No (recommended)</em> drops the gateway env vars and Claude Code falls back to its native endpoint.
+      </p>
 
       <p class="step-label"><span class="num">3</span>Install system-wide as <code>ccg</code></p>
       <p class="meta" id="step3Meta" style="margin:0 0 6px">Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.</p>
@@ -612,6 +615,13 @@ export function renderDashboard(): string {
         <button id="copyHijackBtn" type="button" class="copy-btn">Copy</button>
       </div>
 
+      <p class="step-label"><span class="num">5</span>Hijack Claude Code in VS Code / Cursor (optional)</p>
+      <p class="meta" id="step5Meta" style="margin:0 0 6px">Persists gateway env vars at the user level so the Claude Code extension inside VS Code / Cursor also routes through this gateway. Restart the editor afterwards. Undo with <code>ccg release-gui</code>.</p>
+      <div class="snippet-block">
+        <pre id="hijackGuiCmd">ccg hijack-gui</pre>
+        <button id="copyHijackGuiBtn" type="button" class="copy-btn">Copy</button>
+      </div>
+
       <p class="step-label">All <code>ccg</code> subcommands</p>
       <div class="cmd-table">
         <code>ccg</code><span>Start Claude Code through this gateway.</span>
@@ -621,6 +631,8 @@ export function renderDashboard(): string {
         <code>ccg uninstall</code><span>Remove <code>ccg</code> and undo any hijack alias.</span>
         <code>ccg hijack</code><span>Alias <code>claude</code> to <code>ccg</code> so the native CLI routes through the gateway.</span>
         <code>ccg release</code><span>Remove the alias — <code>claude</code> goes back to native.</span>
+        <code>ccg hijack-gui</code><span>Persist gateway env vars so the VS Code / Cursor extension uses the gateway.</span>
+        <code>ccg release-gui</code><span>Remove those env vars — the extension goes back to native.</span>
         <code>ccg native [args]</code><span>Run native <code>claude</code> once, bypassing the gateway (no permanent change).</span>
         <code>ccg status</code><span>Show the configured gateway URL, hijack state, and a health check.</span>
         <code>ccg help</code><span>Print the same command list inside the terminal.</span>
@@ -1461,6 +1473,7 @@ export function renderDashboard(): string {
   wireCopyButton('copyCmdBtn', 'successCmd');
   wireCopyButton('copyInstallBtn', 'installCmd');
   wireCopyButton('copyHijackBtn', 'hijackCmd');
+  wireCopyButton('copyHijackGuiBtn', 'hijackGuiCmd');
   wireCopyButton('copyXattrBtn', 'xattrCmd');
   document.getElementById('addClientModal').addEventListener('click', (e) => {
     if (e.target.id === 'addClientModal') closeModal();
