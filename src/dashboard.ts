@@ -459,6 +459,7 @@ export function renderDashboard(): string {
     <a href="#models"><span class="icon">◇</span>By model</a>
     <a href="#clients"><span class="icon">◎</span>Clients</a>
     <a href="#recent"><span class="icon">»</span>Recent requests</a>
+    <a href="#install"><span class="icon">⤓</span>Install guide</a>
     <a href="#about"><span class="icon">?</span>How to use</a>
   </nav>
 </aside>
@@ -527,6 +528,80 @@ export function renderDashboard(): string {
         <span id="rfCount" class="count"></span>
       </div>
       <div id="recentTable"></div>
+    </section>
+    <section id="install" class="card">
+      <h2>Install guide</h2>
+      <p class="meta" style="margin:0 0 12px">
+        Reference copy of the steps shown in the "Client created" panel — kept on the page so you can
+        review and copy them even after closing the modal. Pick a client and platform to fill in the exact file name.
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <select id="igClient" style="min-width:160px"><option value="">&lt;client name&gt;</option></select>
+        <select id="igPlatform" style="min-width:190px">
+          <option value="unix">macOS / Linux (bash)</option>
+          <option value="windows">Windows (PowerShell)</option>
+        </select>
+      </div>
+
+      <p class="step-label" id="igStep1Label"><span class="num">1</span>macOS — if Gatekeeper blocks the file</p>
+      <p class="meta" id="igStep1Meta" style="margin:0 0 6px"></p>
+      <div class="snippet-block">
+        <pre id="igUnblockCmd"></pre>
+        <button id="igCopyUnblock" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label"><span class="num">2</span>Run the launcher (quick test)</p>
+      <p class="meta" id="igRunMeta" style="margin:0 0 6px"></p>
+      <div class="snippet-block">
+        <pre id="igRunCmd"></pre>
+        <button id="igCopyRun" type="button" class="copy-btn">Copy</button>
+      </div>
+      <p class="meta" style="margin:6px 0 0;color:var(--warn);font-size:12px">
+        ⚠ On first run, Claude Code asks <em>"Do you want to use this custom API?"</em> with options <strong>Yes</strong> / <strong>No (recommended)</strong>. Choose <strong>Yes</strong> — picking <em>No (recommended)</em> drops the gateway env vars and Claude Code falls back to its native endpoint.
+      </p>
+
+      <p class="step-label"><span class="num">3</span>Install system-wide as <code>ccg</code></p>
+      <p class="meta" id="igInstallMeta" style="margin:0 0 6px"></p>
+      <div class="snippet-block">
+        <pre id="igInstallCmd"></pre>
+        <button id="igCopyInstall" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label"><span class="num">4</span>Hijack <code>claude</code> → gateway (optional)</p>
+      <p class="meta" id="igHijackMeta" style="margin:0 0 6px"></p>
+      <div class="snippet-block">
+        <pre id="igHijackCmd">ccg hijack</pre>
+        <button id="igCopyHijack" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label"><span class="num">5</span>Hijack Claude Code in VS Code / Cursor (optional)</p>
+      <p class="meta" style="margin:0 0 6px">Persists gateway env vars at the user level so the Claude Code extension inside VS Code / Cursor also routes through this gateway. Restart the editor afterwards. Undo with <code>ccg release-gui</code>.</p>
+      <div class="snippet-block">
+        <pre id="igHijackGuiCmd">ccg hijack-gui</pre>
+        <button id="igCopyHijackGui" type="button" class="copy-btn">Copy</button>
+      </div>
+
+      <p class="step-label">All <code>ccg</code> subcommands</p>
+      <div class="cmd-table">
+        <code>ccg</code><span>Start Claude Code through this gateway.</span>
+        <code>ccg [claude args]</code><span>Forward any flags to Claude Code (e.g. <code>--model</code>, <code>--resume</code>).</span>
+        <code>ccg --print "hi"</code><span>Single-shot non-interactive mode.</span>
+        <code>ccg install</code><span>Install this launcher as the <code>ccg</code> system command.</span>
+        <code>ccg uninstall</code><span>Remove <code>ccg</code> and undo any hijack alias.</span>
+        <code>ccg hijack</code><span>Alias <code>claude</code> to <code>ccg</code> so the native CLI routes through the gateway.</span>
+        <code>ccg release</code><span>Remove the alias — <code>claude</code> goes back to native.</span>
+        <code>ccg hijack-gui</code><span>Persist gateway env vars so the VS Code / Cursor extension uses the gateway.</span>
+        <code>ccg release-gui</code><span>Remove those env vars — the extension goes back to native.</span>
+        <code>ccg native [args]</code><span>Run native <code>claude</code> once, bypassing the gateway (no permanent change).</span>
+        <code>ccg status</code><span>Show the configured gateway URL, hijack state, and a health check.</span>
+        <code>ccg help</code><span>Print the same command list inside the terminal.</span>
+      </div>
+
+      <p class="meta" style="margin:14px 0 0;font-size:12px">
+        Prerequisite: Claude Code installed (<code>npm install -g @anthropic-ai/claude-code</code>).
+        The launcher only sets env vars for its own process — nothing is written to the user's shell config unless they run <code>ccg hijack</code>.
+        Need a fresh launcher file? Use <strong>Re-download</strong> next to the client above.
+      </p>
     </section>
     <details id="about" class="card">
       <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">
@@ -1279,6 +1354,7 @@ export function renderDashboard(): string {
     if (!res.ok) return;
     const data = await res.json();
     renderClientsConfig(data.clients || []);
+    populateInstallGuideClients(data.clients || []);
   };
 
   const showError = (msg) => {
@@ -1305,51 +1381,98 @@ export function renderDashboard(): string {
   };
   const closeModal = () => { document.getElementById('addClientModal').style.display = 'none'; };
 
+  // Shared command/copy text for the modal success panel and the on-page
+  // Install guide section, so both always show identical instructions.
+  const launcherSteps = (name, platform) => {
+    const isWin = platform === 'windows';
+    const fname = isWin ? 'cc-' + name + '.ps1' : 'cc-' + name;
+    if (isWin) {
+      return {
+        fname,
+        step1Label: '<span class="num">1</span>Windows — allow PowerShell scripts &amp; unblock file',
+        step1Meta: 'One-time per machine: enable <code>RemoteSigned</code> policy for your user, then strip the Mark-of-the-Web from the downloaded file.',
+        unblockCmd: 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\\\' + fname,
+        runMeta: 'Run the launcher with PowerShell to verify the gateway connection.',
+        runCmd: '.\\\\' + fname,
+        installMeta: 'Copies the launcher into <code>%LOCALAPPDATA%\\\\ccg-bin</code> and adds it to your user <code>PATH</code> (open a new terminal afterwards).',
+        installCmd: '.\\\\' + fname + ' install',
+        hijackMeta: 'Adds <code>Set-Alias claude ccg</code> to your PowerShell profile so every <code>claude</code> invocation routes through this gateway. New PowerShell windows pick it up; reload the current one with <code>. $PROFILE</code>. Undo with <code>ccg release</code>.',
+      };
+    }
+    return {
+      fname,
+      step1Label: '<span class="num">1</span>macOS — if Gatekeeper blocks the file',
+      step1Meta: 'Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.',
+      unblockCmd: 'xattr -d com.apple.quarantine ' + fname,
+      runMeta: 'Make it executable and start Claude Code through the gateway.',
+      runCmd: 'chmod +x ' + fname + ' && ./' + fname,
+      installMeta: 'Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.',
+      installCmd: 'chmod +x ' + fname + ' && ./' + fname + ' install',
+      hijackMeta: 'Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.',
+    };
+  };
+
   const showSuccess = (name, platform) => {
     document.getElementById('modalForm').style.display = 'none';
     const sucEl = document.getElementById('modalSuccess');
     sucEl.style.display = 'block';
     modalBoxEl().classList.add('wide');
     document.getElementById('successName').textContent = name;
-    const isWin = platform === 'windows';
-    const fname = isWin ? 'cc-' + name + '.ps1' : 'cc-' + name;
-    document.getElementById('successFile').textContent = fname;
-    if (isWin) {
-      document.getElementById('step1Label').innerHTML =
-        '<span class="num">1</span>Windows — allow PowerShell scripts &amp; unblock file';
-      document.getElementById('step1Meta').innerHTML =
-        'One-time per machine: enable <code>RemoteSigned</code> policy for your user, then strip the Mark-of-the-Web from the downloaded file.';
-      document.getElementById('xattrCmd').textContent =
-        'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\\\' + fname;
-      document.getElementById('step2Meta').textContent =
-        'Run the launcher with PowerShell to verify the gateway connection.';
-      document.getElementById('successCmd').textContent = '.\\\\' + fname;
-      document.getElementById('step3Meta').innerHTML =
-        'Copies the launcher into <code>%LOCALAPPDATA%\\\\ccg-bin</code> and adds it to your user <code>PATH</code> (open a new terminal afterwards).';
-      document.getElementById('installCmd').textContent = '.\\\\' + fname + ' install';
-      document.getElementById('step4Meta').innerHTML =
-        'Adds <code>Set-Alias claude ccg</code> to your PowerShell profile so every <code>claude</code> invocation routes through this gateway. New PowerShell windows pick it up; reload the current one with <code>. $PROFILE</code>. Undo with <code>ccg release</code>.';
-      document.getElementById('hijackCmd').textContent = 'ccg hijack';
-    } else {
-      document.getElementById('step1Label').innerHTML =
-        '<span class="num">1</span>macOS — if Gatekeeper blocks the file';
-      document.getElementById('step1Meta').textContent =
-        'Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.';
-      document.getElementById('xattrCmd').textContent =
-        'xattr -d com.apple.quarantine ' + fname;
-      document.getElementById('step2Meta').textContent =
-        'Make it executable and start Claude Code through the gateway.';
-      document.getElementById('successCmd').textContent =
-        'chmod +x ' + fname + ' && ./' + fname;
-      document.getElementById('step3Meta').innerHTML =
-        'Copies the launcher into <code>$PATH</code> so it can be invoked from anywhere.';
-      document.getElementById('installCmd').textContent =
-        'chmod +x ' + fname + ' && ./' + fname + ' install';
-      document.getElementById('step4Meta').innerHTML =
-        'Aliases the native <code>claude</code> command so every invocation routes through this gateway. New terminals pick it up automatically; reopen the current one or <code>source</code> the shell rc. Undo any time with <code>ccg release</code>.';
-      document.getElementById('hijackCmd').textContent = 'ccg hijack';
-    }
+    const s = launcherSteps(name, platform);
+    document.getElementById('successFile').textContent = s.fname;
+    document.getElementById('step1Label').innerHTML = s.step1Label;
+    document.getElementById('step1Meta').innerHTML = s.step1Meta;
+    document.getElementById('xattrCmd').textContent = s.unblockCmd;
+    document.getElementById('step2Meta').textContent = s.runMeta;
+    document.getElementById('successCmd').textContent = s.runCmd;
+    document.getElementById('step3Meta').innerHTML = s.installMeta;
+    document.getElementById('installCmd').textContent = s.installCmd;
+    document.getElementById('step4Meta').innerHTML = s.hijackMeta;
+    document.getElementById('hijackCmd').textContent = 'ccg hijack';
+    // Mirror the freshly created client into the on-page Install guide so the
+    // commands stay visible after the modal closes.
+    syncInstallGuide(name, platform);
   };
+
+  // ── Install guide section (on-page copy of the modal steps) ──
+  const updateInstallGuide = () => {
+    const name = document.getElementById('igClient').value || '<name>';
+    const platform = document.getElementById('igPlatform').value;
+    const s = launcherSteps(name, platform);
+    document.getElementById('igStep1Label').innerHTML = s.step1Label;
+    document.getElementById('igStep1Meta').innerHTML = s.step1Meta;
+    document.getElementById('igUnblockCmd').textContent = s.unblockCmd;
+    document.getElementById('igRunMeta').textContent = s.runMeta;
+    document.getElementById('igRunCmd').textContent = s.runCmd;
+    document.getElementById('igInstallMeta').innerHTML = s.installMeta;
+    document.getElementById('igInstallCmd').textContent = s.installCmd;
+    document.getElementById('igHijackMeta').innerHTML = s.hijackMeta;
+  };
+
+  // Point the Install guide at a specific client (called after creating one).
+  const syncInstallGuide = (name, platform) => {
+    const sel = document.getElementById('igClient');
+    if (![...sel.options].some(o => o.value === name)) {
+      sel.insertAdjacentHTML('beforeend',
+        '<option value="' + esc(name) + '">' + esc(name) + '</option>');
+    }
+    sel.value = name;
+    document.getElementById('igPlatform').value = platform;
+    updateInstallGuide();
+  };
+
+  const populateInstallGuideClients = (clients) => {
+    const sel = document.getElementById('igClient');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">&lt;client name&gt;</option>'
+      + clients.map(c => '<option value="' + esc(c.name) + '">' + esc(c.name) + '</option>').join('');
+    sel.value = clients.some(c => c.name === cur) ? cur : '';
+    updateInstallGuide();
+  };
+
+  document.getElementById('igClient').addEventListener('change', updateInstallGuide);
+  document.getElementById('igPlatform').addEventListener('change', updateInstallGuide);
+  updateInstallGuide();
 
   const wireCopyButton = (btnId, sourceId) => {
     document.getElementById(btnId).addEventListener('click', async (e) => {
@@ -1475,6 +1598,11 @@ export function renderDashboard(): string {
   wireCopyButton('copyHijackBtn', 'hijackCmd');
   wireCopyButton('copyHijackGuiBtn', 'hijackGuiCmd');
   wireCopyButton('copyXattrBtn', 'xattrCmd');
+  wireCopyButton('igCopyUnblock', 'igUnblockCmd');
+  wireCopyButton('igCopyRun', 'igRunCmd');
+  wireCopyButton('igCopyInstall', 'igInstallCmd');
+  wireCopyButton('igCopyHijack', 'igHijackCmd');
+  wireCopyButton('igCopyHijackGui', 'igHijackGuiCmd');
   document.getElementById('addClientModal').addEventListener('click', (e) => {
     if (e.target.id === 'addClientModal') closeModal();
   });
@@ -1547,6 +1675,7 @@ export function renderDashboard(): string {
     'models': 'By model',
     'clients': 'Clients',
     'recent': 'Recent requests',
+    'install': 'Install guide',
     'about': 'How to use',
   };
   const navLinks = Array.from(document.querySelectorAll('#sideNav a'));
@@ -1559,7 +1688,7 @@ export function renderDashboard(): string {
     const title = document.getElementById('pageTitle');
     if (title && sectionToTitle[id]) title.textContent = sectionToTitle[id];
   };
-  const observed = ['topStats', 'periods', 'charts-section', 'models', 'clients', 'recent', 'about']
+  const observed = ['topStats', 'periods', 'charts-section', 'models', 'clients', 'recent', 'install', 'about']
     .map(id => document.getElementById(id))
     .filter(Boolean);
   if ('IntersectionObserver' in window) {
