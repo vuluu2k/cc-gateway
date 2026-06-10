@@ -1,4 +1,5 @@
-// Anthropic public list prices in USD per 1M tokens, as of 2026-05.
+// Anthropic public list prices in USD per 1M tokens, as of 2026-06.
+// Source: https://platform.claude.com/docs/en/about-claude/pricing
 // When a request reports a model id we don't recognise, we fall back to the
 // most specific family match (sonnet/opus/haiku) and finally to sonnet rates.
 
@@ -10,15 +11,17 @@ export interface Pricing {
 }
 
 const RATES: Record<string, Pricing> = {
+  // Fable family (top tier, above opus)
+  'claude-fable-5':        { input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
   // Claude 4.x family (current)
   'claude-opus-4-8':       { input:  5.00, output: 25.00, cacheRead: 0.50, cacheWrite:  6.25 },
-  'claude-opus-4-7':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
-  'claude-opus-4-6':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
-  'claude-opus-4-5':       { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+  'claude-opus-4-7':       { input:  5.00, output: 25.00, cacheRead: 0.50, cacheWrite:  6.25 },
+  'claude-opus-4-6':       { input:  5.00, output: 25.00, cacheRead: 0.50, cacheWrite:  6.25 },
+  'claude-opus-4-5':       { input:  5.00, output: 25.00, cacheRead: 0.50, cacheWrite:  6.25 },
   'claude-sonnet-4-7':     { input:  3.00, output: 15.00, cacheRead: 0.30, cacheWrite:  3.75 },
   'claude-sonnet-4-6':     { input:  3.00, output: 15.00, cacheRead: 0.30, cacheWrite:  3.75 },
   'claude-sonnet-4-5':     { input:  3.00, output: 15.00, cacheRead: 0.30, cacheWrite:  3.75 },
-  'claude-haiku-4-5':      { input:  0.80, output:  4.00, cacheRead: 0.08, cacheWrite:  1.00 },
+  'claude-haiku-4-5':      { input:  1.00, output:  5.00, cacheRead: 0.10, cacheWrite:  1.25 },
   // 3.x family (older but may still appear)
   'claude-3-7-sonnet':     { input:  3.00, output: 15.00, cacheRead: 0.30, cacheWrite:  3.75 },
   'claude-3-5-sonnet':     { input:  3.00, output: 15.00, cacheRead: 0.30, cacheWrite:  3.75 },
@@ -33,6 +36,7 @@ function lookupRate(model: string): Pricing {
     if (key === id || key.startsWith(id + '-')) return RATES[id]
   }
   // Family fallback
+  if (key.includes('fable'))  return RATES['claude-fable-5']
   if (key.includes('opus'))   return RATES['claude-opus-4-8']
   if (key.includes('haiku'))  return RATES['claude-haiku-4-5']
   return RATES['claude-sonnet-4-7']
