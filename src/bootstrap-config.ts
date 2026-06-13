@@ -104,7 +104,7 @@ prompt_env:
   platform: darwin
   shell: zsh
   os_version: "Darwin 24.4.0"
-  working_dir: /Users/jack/projects
+  working_dir: /Users/dev/projects
 
 process:
   constrained_memory: 34359738368

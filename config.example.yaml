@@ -63,7 +63,7 @@ prompt_env:
   platform: darwin                    # Must match env.platform
   shell: zsh                          # Shell name shown in prompt
   os_version: "Darwin 24.4.0"        # uname -sr output
-  working_dir: /Users/jack/projects   # Canonical home directory path prefix
+  working_dir: /Users/dev/projects    # Canonical home directory path prefix
 
 # Canonical process metrics (should look like a real machine)
 process:

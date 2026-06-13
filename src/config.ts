@@ -42,7 +42,7 @@ export type Config = {
     platform: string        // "darwin" — must match env.platform
     shell: string           // "zsh"
     os_version: string      // "Darwin 24.4.0" — uname -sr output
-    working_dir: string     // "/Users/jack/projects" — canonical home path prefix
+    working_dir: string     // "/Users/dev/projects" — canonical home path prefix
   }
   process: {
     constrained_memory: number
