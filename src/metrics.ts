@@ -106,6 +106,91 @@ export function periodStart(period: 'lifetime' | 'monthly' | 'daily' | undefined
   return 0
 }
 
+/**
+ * Per-client usage summary for the self-service portal: lifetime totals plus
+ * today / 7d / 30d breakdowns. Scoped to a single client so a portal user only
+ * ever sees their own numbers.
+ */
+export function getClientStats(client: string) {
+  const db = getDb()
+  const now = Date.now()
+
+  const totalsRow = db
+    .prepare(
+      `SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
+        SUM(input_tokens) as input_tokens,
+        SUM(output_tokens) as output_tokens,
+        SUM(cache_read_tokens) as cache_read_tokens,
+        SUM(cache_creation_tokens) as cache_creation_tokens,
+        SUM(cost_usd) as cost_usd,
+        MAX(ts) as last_seen
+      FROM request_metrics WHERE client = ?`,
+    )
+    .get(client) as {
+      total: number
+      errors: number | null
+      input_tokens: number | null
+      output_tokens: number | null
+      cache_read_tokens: number | null
+      cache_creation_tokens: number | null
+      cost_usd: number | null
+      last_seen: number | null
+    }
+
+  const day = 24 * HOUR_MS
+  const periodDefs = [
+    { key: 'today', label: 'Today', since: now - day },
+    { key: '7d', label: 'Last 7d', since: now - 7 * day },
+    { key: '30d', label: 'Last 30d', since: now - 30 * day },
+  ]
+  const periodStmt = db.prepare(
+    `SELECT
+      COUNT(*) as total,
+      SUM(input_tokens) as input_tokens,
+      SUM(output_tokens) as output_tokens,
+      SUM(cache_read_tokens) as cache_read_tokens,
+      SUM(cache_creation_tokens) as cache_creation_tokens,
+      SUM(cost_usd) as cost_usd
+    FROM request_metrics WHERE client = ? AND ts >= ?`,
+  )
+  const periods = periodDefs.map((p) => {
+    const r = periodStmt.get(client, p.since) as {
+      total: number
+      input_tokens: number | null
+      output_tokens: number | null
+      cache_read_tokens: number | null
+      cache_creation_tokens: number | null
+      cost_usd: number | null
+    }
+    return {
+      key: p.key,
+      label: p.label,
+      total: r.total || 0,
+      inputTokens: r.input_tokens || 0,
+      outputTokens: r.output_tokens || 0,
+      cacheReadTokens: r.cache_read_tokens || 0,
+      cacheCreationTokens: r.cache_creation_tokens || 0,
+      costUsd: r.cost_usd || 0,
+    }
+  })
+
+  return {
+    lifetime: {
+      total: totalsRow.total || 0,
+      errors: totalsRow.errors || 0,
+      inputTokens: totalsRow.input_tokens || 0,
+      outputTokens: totalsRow.output_tokens || 0,
+      cacheReadTokens: totalsRow.cache_read_tokens || 0,
+      cacheCreationTokens: totalsRow.cache_creation_tokens || 0,
+      costUsd: totalsRow.cost_usd || 0,
+      lastSeen: totalsRow.last_seen || 0,
+    },
+    periods,
+  }
+}
+
 interface ClientRow {
   client: string
   total: number

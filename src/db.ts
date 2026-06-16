@@ -46,6 +46,16 @@ function migrate(db: Database.Database) {
       duration_ms INTEGER NOT NULL
     );
 
+    -- Self-service portal login credentials, keyed by client name (the same
+    -- name used in config.yaml's auth.tokens). The token still drives the API
+    -- proxy; this password only gates the portal UI.
+    CREATE TABLE IF NOT EXISTS client_credentials (
+      client_name TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_rm_ts ON request_metrics(ts);
     CREATE INDEX IF NOT EXISTS idx_rm_client_ts ON request_metrics(client, ts);
   `)

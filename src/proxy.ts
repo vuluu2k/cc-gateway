@@ -10,16 +10,28 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientCostSince, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { renderDashboard, renderLogin } from './dashboard.js'
+import { renderPortal, renderPortalLogin } from './portal.js'
+import { renderLanding } from './landing.js'
 import { authenticateUser } from './users.js'
+import {
+  generateAndSetClientPassword,
+  verifyClientPassword,
+  changeClientPassword,
+  removeClientPassword,
+} from './client-auth.js'
 import {
   createSessionCookie,
   setCookieHeader,
   clearCookieHeader,
   getSessionFromRequest,
+  createPortalCookie,
+  setPortalCookieHeader,
+  clearPortalCookieHeader,
+  getPortalSessionFromRequest,
 } from './session.js'
 import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
@@ -143,17 +155,26 @@ async function handleRequest(
     return
   }
 
-  // Login page + session-protected dashboard
+  // Public landing + admin area (admin login moved to /admin) + dashboard APIs.
   if (
+    pathname === '/' ||
+    pathname === '/admin' ||
+    pathname === '/admin/login' ||
+    pathname === '/admin/logout' ||
     pathname === '/login' ||
     pathname === '/logout' ||
     pathname === '/dashboard' ||
-    pathname === '/' ||
     pathname === '/_metrics' ||
     pathname === '/api/clients' ||
     pathname.startsWith('/api/clients/')
   ) {
     await handleDashboardArea(req, res, pathname, method)
+    return
+  }
+
+  // Client self-service portal (token-authenticated, separate from admin area)
+  if (pathname === '/portal' || pathname.startsWith('/portal/')) {
+    await handlePortalArea(req, res, pathname, method)
     return
   }
 
@@ -470,16 +491,23 @@ async function handleDashboardArea(
 ) {
   const secure = isSecureRequest(req)
 
-  // Root → redirect to dashboard or login
+  // Public landing page.
   if (pathname === '/') {
-    const session = getSessionFromRequest(req)
-    res.writeHead(302, { Location: session ? '/dashboard' : '/login' })
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(renderLanding())
+    return
+  }
+
+  // Legacy /login → canonical admin login at /admin.
+  if (pathname === '/login' && method === 'GET') {
+    res.writeHead(302, { Location: '/admin' })
     res.end()
     return
   }
 
-  // Login: GET shows form, POST authenticates
-  if (pathname === '/login') {
+  // Admin login: GET shows form, POST authenticates. Accept POST on both
+  // /admin (canonical) and /login (legacy form action) for compatibility.
+  if (pathname === '/admin' || (pathname === '/login' && method === 'POST')) {
     if (method === 'GET') {
       // If already logged in, send to dashboard
       if (getSessionFromRequest(req)) {
@@ -529,10 +557,10 @@ async function handleDashboardArea(
     return
   }
 
-  // Logout: clear cookie, redirect to login
-  if (pathname === '/logout') {
+  // Logout: clear cookie, redirect to admin login
+  if (pathname === '/admin/logout' || pathname === '/logout') {
     res.writeHead(302, {
-      Location: '/login',
+      Location: '/admin',
       'Set-Cookie': clearCookieHeader(),
     })
     res.end()
@@ -546,7 +574,7 @@ async function handleDashboardArea(
       res.writeHead(401, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Unauthorized' }))
     } else {
-      res.writeHead(302, { Location: '/login' })
+      res.writeHead(302, { Location: '/admin' })
       res.end()
     }
     return
@@ -628,6 +656,13 @@ async function handleDashboardArea(
         return
       }
       reloadAuthFromConfig()
+      // Generate a one-time portal password the admin hands to the client.
+      let portalPassword = ''
+      try {
+        portalPassword = generateAndSetClientPassword(entry.name)
+      } catch (err) {
+        log('warn', `Failed to set portal password for "${entry.name}": ${err instanceof Error ? err.message : err}`)
+      }
       log('info', `User "${session.u}" added client "${entry.name}"`)
       const isWindows = payload.platform === 'windows'
       const opts = {
@@ -639,7 +674,7 @@ async function handleDashboardArea(
       const script = isWindows ? buildPowerShellLauncherScript(opts) : buildLauncherScript(opts)
       if (payload.format === 'json') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ name: entry.name, token: entry.token, script }))
+        res.end(JSON.stringify({ name: entry.name, token: entry.token, portal_password: portalPassword, script }))
         return
       }
       const filename = isWindows ? `cc-${entry.name}.ps1` : `cc-${entry.name}`
@@ -650,6 +685,7 @@ async function handleDashboardArea(
         'Content-Type': ctype,
         'Content-Disposition': `attachment; filename="${filename}"`,
         'X-Client-Token': entry.token,
+        'X-Portal-Password': portalPassword,
       })
       res.end(script)
       return
@@ -704,6 +740,34 @@ async function handleDashboardArea(
       return
     }
 
+    // POST /api/clients/:name/password — regenerate the client's portal password.
+    if (rest.endsWith('/password')) {
+      if (method !== 'POST') {
+        res.writeHead(405, { Allow: 'POST' })
+        res.end()
+        return
+      }
+      const name = decodeURIComponent(rest.slice(0, -('/password'.length)))
+      const existing = listClients().find((c) => c.name === name)
+      if (!existing) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'client not found' }))
+        return
+      }
+      let password: string
+      try {
+        password = generateAndSetClientPassword(name)
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
+        return
+      }
+      log('info', `User "${session.u}" reset portal password for client "${name}"`)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ name, password }))
+      return
+    }
+
     const name = decodeURIComponent(rest)
     if (method === 'DELETE') {
       let removed = false
@@ -720,6 +784,7 @@ async function handleDashboardArea(
         return
       }
       reloadAuthFromConfig()
+      removeClientPassword(name)
       log('info', `User "${session.u}" removed client "${name}"`)
       res.writeHead(204)
       res.end()
@@ -767,4 +832,206 @@ async function handleDashboardArea(
     res.end()
     return
   }
+}
+
+/**
+ * Client self-service portal. A client authenticates with their own token
+ * (the value from auth.tokens), and can then view the credit they've been
+ * granted + their usage, and download their personal launcher. Everything is
+ * scoped to that single client — no cross-client visibility, no admin powers.
+ */
+async function handlePortalArea(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  method: string,
+) {
+  const secure = isSecureRequest(req)
+
+  // Portal home: login form, or the portal SPA once authenticated.
+  if (pathname === '/portal') {
+    if (getPortalSessionFromRequest(req)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(renderPortal())
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(renderPortalLogin())
+    return
+  }
+
+  // Login: POST a client token.
+  if (pathname === '/portal/login') {
+    if (method === 'GET') {
+      res.writeHead(302, { Location: '/portal' })
+      res.end()
+      return
+    }
+    if (method === 'POST') {
+      let body: Buffer
+      try {
+        body = await readBody(req)
+      } catch {
+        res.writeHead(413, { 'Content-Type': 'text/plain' })
+        res.end('Payload too large')
+        return
+      }
+      const params = new URLSearchParams(body.toString('utf-8'))
+      const name = (params.get('name') || '').trim()
+      const password = params.get('password') || ''
+      // Always run the verify (it burns a dummy hash when there's no row) so a
+      // missing client can't be distinguished by timing. Also require the client
+      // to still exist in config.yaml.
+      const pwOk = verifyClientPassword(name, password)
+      const inConfig = name ? listClients().some((c) => c.name === name) : false
+      if (!pwOk || !inConfig) {
+        log('warn', `Failed portal login for "${name}" from ${req.socket.remoteAddress}`)
+        res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(renderPortalLogin('Invalid client name or password.'))
+        return
+      }
+      const cookie = createPortalCookie(name)
+      log('info', `Client "${name}" signed in to portal`)
+      res.writeHead(302, {
+        Location: '/portal',
+        'Set-Cookie': setPortalCookieHeader(cookie, secure),
+      })
+      res.end()
+      return
+    }
+    res.writeHead(405, { Allow: 'GET, POST' })
+    res.end()
+    return
+  }
+
+  // Logout.
+  if (pathname === '/portal/logout') {
+    res.writeHead(302, {
+      Location: '/portal',
+      'Set-Cookie': clearPortalCookieHeader(),
+    })
+    res.end()
+    return
+  }
+
+  // Everything below requires a valid portal session.
+  const session = getPortalSessionFromRequest(req)
+  if (!session) {
+    if (pathname === '/portal/me') {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+    } else {
+      res.writeHead(302, { Location: '/portal' })
+      res.end()
+    }
+    return
+  }
+
+  // Resolve the client from current config. If it was removed/renamed since the
+  // cookie was issued, drop the session.
+  const client = listClients().find((c) => c.name === session.c)
+  if (!client) {
+    if (pathname === '/portal/me') {
+      res.writeHead(401, { 'Content-Type': 'application/json', 'Set-Cookie': clearPortalCookieHeader() })
+      res.end(JSON.stringify({ error: 'Client no longer exists' }))
+    } else {
+      res.writeHead(302, { Location: '/portal', 'Set-Cookie': clearPortalCookieHeader() })
+      res.end()
+    }
+    return
+  }
+
+  // Usage + credit JSON for this client only.
+  if (pathname === '/portal/me') {
+    const stats = getClientStats(client.name)
+    const limit = client.cost_limit_usd ?? null
+    const period = client.cost_limit_period ?? 'lifetime'
+    const used = getClientCostSince(client.name, periodStart(client.cost_limit_period))
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify({
+      name: client.name,
+      credit: {
+        limit_usd: limit,
+        period,
+        used_usd: Number(used.toFixed(4)),
+        remaining_usd: limit != null ? Number(Math.max(0, limit - used).toFixed(4)) : null,
+      },
+      lifetime: stats.lifetime,
+      periods: stats.periods,
+    }))
+    return
+  }
+
+  // Change this client's own portal password.
+  if (pathname === '/portal/password') {
+    if (method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST' })
+      res.end()
+      return
+    }
+    let body: Buffer
+    try {
+      body = await readBody(req)
+    } catch {
+      res.writeHead(413, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Payload too large' }))
+      return
+    }
+    let payload: { current?: string; new?: string }
+    try {
+      payload = JSON.parse(body.toString('utf-8'))
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON' }))
+      return
+    }
+    try {
+      changeClientPassword(client.name, payload.current || '', payload.new || '')
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
+      return
+    }
+    log('info', `Client "${client.name}" changed their portal password`)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
+  // Download this client's launcher (reuses their existing token).
+  if (pathname === '/portal/launcher') {
+    if (method !== 'GET') {
+      res.writeHead(405, { Allow: 'GET' })
+      res.end()
+      return
+    }
+    const query = new URLSearchParams((req.url || '').split('?')[1] || '')
+    const platform = query.get('platform') || 'unix'
+    const scheme = query.get('scheme') === 'http' ? 'http' : 'https'
+    const gatewayAddr =
+      (query.get('gateway_addr') || '').trim() ||
+      (typeof req.headers.host === 'string' ? req.headers.host : 'localhost:8443')
+    const isWindows = platform === 'windows'
+    const opts = {
+      name: client.name,
+      token: client.token,
+      gatewayAddr,
+      scheme: scheme as 'http' | 'https',
+    }
+    const script = isWindows ? buildPowerShellLauncherScript(opts) : buildLauncherScript(opts)
+    const filename = isWindows ? `cc-${client.name}.ps1` : `cc-${client.name}`
+    const ctype = isWindows
+      ? 'text/plain; charset=utf-8'
+      : 'application/x-shellscript; charset=utf-8'
+    log('info', `Client "${client.name}" downloaded their launcher from the portal`)
+    res.writeHead(200, {
+      'Content-Type': ctype,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    })
+    res.end(script)
+    return
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ error: 'Not found' }))
 }

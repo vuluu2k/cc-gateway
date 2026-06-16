@@ -39,8 +39,8 @@ export function renderLogin(error?: string): string {
 </style>
 </head>
 <body>
-  <form class="box" method="post" action="/login">
-    <h1>CC Gateway</h1>
+  <form class="box" method="post" action="/admin">
+    <h1>CC Gateway · Admin</h1>
     <p class="sub">Sign in to access the dashboard</p>
     ${errBlock}
     <label for="username">Username</label>
@@ -48,6 +48,9 @@ export function renderLogin(error?: string): string {
     <label for="password">Password</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required />
     <button type="submit">Sign in</button>
+    <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#8b949e">
+      Are you a client? <a href="/portal" style="color:#58a6ff">Open the client portal</a>
+    </p>
   </form>
 </body>
 </html>`
@@ -473,7 +476,7 @@ export function renderDashboard(): string {
       <option value="hour">Last 24 h</option>
     </select>
     <button id="refreshBtn">Refresh</button>
-    <form action="/logout" method="post">
+    <form action="/admin/logout" method="post">
       <button type="submit">Logout</button>
     </form>
   </div>
@@ -659,6 +662,16 @@ export function renderDashboard(): string {
       <h3>Client created · <span id="successName"></span></h3>
       <p class="meta" style="margin:0 0 4px">File <code id="successFile"></code> has been downloaded. Send it to the user and follow the steps below.</p>
 
+      <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:12px 0 4px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:8px">Client portal login — share these with the client</div>
+        <div class="cmd-table" style="background:var(--bg)">
+          <code>Portal</code><span><a id="portalUrl" href="/portal" target="_blank" style="color:var(--accent)">/portal</a></span>
+          <code>Name</code><span id="portalLoginName"></span>
+          <code>Password</code><span><code id="portalPassword" style="color:var(--ok)"></code></span>
+        </div>
+        <p class="meta" style="margin:8px 0 0;font-size:11px">Shown once. The client can change it after first login. Lost it? Use <strong>Reset password</strong> on the client row.</p>
+      </div>
+
       <p class="step-label" id="step1Label"><span class="num">1</span>macOS — if Gatekeeper blocks the file</p>
       <p class="meta" id="step1Meta" style="margin:0 0 6px">Removes the quarantine attribute Safari/Chrome adds to downloads. Skip on Linux, or if the launcher runs without warning.</p>
       <div class="snippet-block">
@@ -764,6 +777,20 @@ export function renderDashboard(): string {
     <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
       <button id="lCancel" type="button">Cancel</button>
       <button id="lSubmit" type="button" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="pwResetModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <h3>Password reset · <span id="pwResetName"></span></h3>
+    <p class="meta" style="margin:0 0 12px">New portal password — copy it now, it won't be shown again. The client can change it after logging in.</p>
+    <div class="snippet-block">
+      <pre id="pwResetValue"></pre>
+      <button id="pwResetCopy" type="button" class="copy-btn">Copy</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button id="pwResetDone" type="button" class="primary">Done</button>
     </div>
   </div>
 </div>
@@ -1226,7 +1253,7 @@ export function renderDashboard(): string {
     try {
       const res = await fetch('/_metrics', { cache: 'no-store', credentials: 'same-origin' });
       if (res.status === 401) {
-        location.href = '/login';
+        location.href = '/admin';
         return;
       }
       if (!res.ok) {
@@ -1312,6 +1339,7 @@ export function renderDashboard(): string {
                   data-limit="\${c.cost_limit_usd || ''}"
                   data-period="\${esc(c.cost_limit_period || 'lifetime')}">Set limit</button>
           <button data-regen="\${esc(c.name)}">Re-download</button>
+          <button data-reset-pw="\${esc(c.name)}">Reset password</button>
           <button class="danger" data-del-client="\${esc(c.name)}">Delete</button>
         </td>
       </tr>\`).join('');
@@ -1347,6 +1375,26 @@ export function renderDashboard(): string {
     el.querySelectorAll('[data-regen]').forEach(btn => {
       btn.addEventListener('click', () => openRegenModal(btn.getAttribute('data-regen')));
     });
+    el.querySelectorAll('[data-reset-pw]').forEach(btn => {
+      btn.addEventListener('click', () => resetClientPassword(btn.getAttribute('data-reset-pw')));
+    });
+  };
+
+  // Generate a fresh portal password for a client and show it once.
+  const resetClientPassword = async (name) => {
+    if (!confirm('Reset the portal password for "' + name + '"? The current password stops working immediately.')) return;
+    const res = await fetch('/api/clients/' + encodeURIComponent(name) + '/password', {
+      method: 'POST', credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('Failed: ' + (err.error || res.status));
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('pwResetName').textContent = name;
+    document.getElementById('pwResetValue').textContent = data.password || '';
+    document.getElementById('pwResetModal').style.display = 'flex';
   };
 
   const loadClients = async () => {
@@ -1412,12 +1460,15 @@ export function renderDashboard(): string {
     };
   };
 
-  const showSuccess = (name, platform) => {
+  const showSuccess = (name, platform, password) => {
     document.getElementById('modalForm').style.display = 'none';
     const sucEl = document.getElementById('modalSuccess');
     sucEl.style.display = 'block';
     modalBoxEl().classList.add('wide');
     document.getElementById('successName').textContent = name;
+    document.getElementById('portalLoginName').textContent = name;
+    document.getElementById('portalPassword').textContent = password || '(unavailable — use Reset password)';
+    document.getElementById('portalUrl').href = location.origin + '/portal';
     const s = launcherSteps(name, platform);
     document.getElementById('successFile').textContent = s.fname;
     document.getElementById('step1Label').innerHTML = s.step1Label;
@@ -1523,6 +1574,7 @@ export function renderDashboard(): string {
         showError(err.error || 'Request failed: ' + res.status);
         return;
       }
+      const password = res.headers.get('X-Portal-Password') || '';
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1532,7 +1584,7 @@ export function renderDashboard(): string {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      showSuccess(name, platform);
+      showSuccess(name, platform, password);
       loadClients();
     } finally {
       submitBtn.disabled = false;
@@ -1598,6 +1650,13 @@ export function renderDashboard(): string {
   wireCopyButton('copyHijackBtn', 'hijackCmd');
   wireCopyButton('copyHijackGuiBtn', 'hijackGuiCmd');
   wireCopyButton('copyXattrBtn', 'xattrCmd');
+  wireCopyButton('pwResetCopy', 'pwResetValue');
+  document.getElementById('pwResetDone').addEventListener('click', () => {
+    document.getElementById('pwResetModal').style.display = 'none';
+  });
+  document.getElementById('pwResetModal').addEventListener('click', (e) => {
+    if (e.target.id === 'pwResetModal') document.getElementById('pwResetModal').style.display = 'none';
+  });
   wireCopyButton('igCopyUnblock', 'igUnblockCmd');
   wireCopyButton('igCopyRun', 'igRunCmd');
   wireCopyButton('igCopyInstall', 'igInstallCmd');

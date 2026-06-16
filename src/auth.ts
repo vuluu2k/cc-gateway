@@ -15,6 +15,12 @@ export function setAuthTokens(tokens: TokenEntry[]) {
   }
 }
 
+/** Look up a client entry by its raw token (used by the client self-service portal login). */
+export function lookupToken(token: string): TokenEntry | null {
+  if (!token) return null
+  return tokenMap.get(token) ?? null
+}
+
 /**
  * Authenticate incoming request by Bearer token.
  * Returns the matched TokenEntry (so callers can read name + cost limit) or null.
