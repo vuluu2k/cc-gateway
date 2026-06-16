@@ -56,6 +56,14 @@ function migrate(db: Database.Database) {
       updated_at INTEGER NOT NULL
     );
 
+    -- Editable personal info a client can manage from their portal.
+    CREATE TABLE IF NOT EXISTS client_profiles (
+      client_name TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_rm_ts ON request_metrics(ts);
     CREATE INDEX IF NOT EXISTS idx_rm_client_ts ON request_metrics(client, ts);
   `)

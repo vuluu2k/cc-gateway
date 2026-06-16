@@ -191,6 +191,68 @@ export function getClientStats(client: string) {
   }
 }
 
+/** Per-model usage totals scoped to a single client (for the portal). */
+export function getClientModels(client: string) {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+        model,
+        COUNT(*) as total,
+        SUM(input_tokens) as input_tokens,
+        SUM(output_tokens) as output_tokens,
+        SUM(cache_read_tokens) as cache_read_tokens,
+        SUM(cache_creation_tokens) as cache_creation_tokens,
+        SUM(cost_usd) as cost_usd
+      FROM request_metrics
+      WHERE client = ? AND model != ''
+      GROUP BY model
+      ORDER BY cost_usd DESC`,
+    )
+    .all(client) as Array<{
+      model: string
+      total: number
+      input_tokens: number | null
+      output_tokens: number | null
+      cache_read_tokens: number | null
+      cache_creation_tokens: number | null
+      cost_usd: number | null
+    }>
+  return rows.map((r) => ({
+    model: r.model,
+    total: r.total,
+    inputTokens: r.input_tokens || 0,
+    outputTokens: r.output_tokens || 0,
+    cacheReadTokens: r.cache_read_tokens || 0,
+    cacheCreationTokens: r.cache_creation_tokens || 0,
+    costUsd: r.cost_usd || 0,
+  }))
+}
+
+/** Most recent requests for a single client (for the portal activity feed). */
+export function getClientRecent(client: string, limit = 20) {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+        ts, method, path, status,
+        duration_ms as durationMs,
+        model,
+        input_tokens as inputTokens,
+        output_tokens as outputTokens,
+        cache_read_tokens as cacheReadTokens,
+        cache_creation_tokens as cacheCreationTokens,
+        cost_usd as costUsd,
+        user_message as userMessage
+      FROM request_metrics
+      WHERE client = ?
+      ORDER BY ts DESC
+      LIMIT ?`,
+    )
+    .all(client, limit) as Array<RequestRecord>
+  return rows.map((r) => r.userMessage
+    ? { ...r, userMessage: stripSyntheticBlocks(r.userMessage) }
+    : r)
+}
+
 interface ClientRow {
   client: string
   total: number

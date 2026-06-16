@@ -42,6 +42,14 @@ export function hasClientPassword(name: string): boolean {
   return !!row
 }
 
+/** Credential timestamps for the portal "account" view, or null if no password set. */
+export function getClientCredentialMeta(name: string): { created_at: number; updated_at: number } | null {
+  const row = getDb()
+    .prepare('SELECT created_at, updated_at FROM client_credentials WHERE client_name = ?')
+    .get(name) as { created_at: number; updated_at: number } | undefined
+  return row ?? null
+}
+
 export function verifyClientPassword(name: string, password: string): boolean {
   const row = getDb()
     .prepare('SELECT * FROM client_credentials WHERE client_name = ?')

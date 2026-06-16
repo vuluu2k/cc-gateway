@@ -10,7 +10,7 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { renderDashboard, renderLogin } from './dashboard.js'
@@ -22,7 +22,9 @@ import {
   verifyClientPassword,
   changeClientPassword,
   removeClientPassword,
+  getClientCredentialMeta,
 } from './client-auth.js'
+import { getClientProfile, setClientProfile, removeClientProfile } from './client-profile.js'
 import {
   createSessionCookie,
   setCookieHeader,
@@ -785,6 +787,7 @@ async function handleDashboardArea(
       }
       reloadAuthFromConfig()
       removeClientPassword(name)
+      removeClientProfile(name)
       log('info', `User "${session.u}" removed client "${name}"`)
       res.writeHead(204)
       res.end()
@@ -941,15 +944,26 @@ async function handlePortalArea(
     return
   }
 
-  // Usage + credit JSON for this client only.
+  // Usage + credit + profile JSON for this client only.
   if (pathname === '/portal/me') {
     const stats = getClientStats(client.name)
     const limit = client.cost_limit_usd ?? null
     const period = client.cost_limit_period ?? 'lifetime'
     const used = getClientCostSince(client.name, periodStart(client.cost_limit_period))
+    const profile = getClientProfile(client.name)
+    const credMeta = getClientCredentialMeta(client.name)
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({
       name: client.name,
+      token: client.token,
+      gateway_addr: typeof req.headers.host === 'string' ? req.headers.host : '',
+      profile: { display_name: profile.display_name, email: profile.email },
+      account: {
+        created_at: credMeta?.created_at ?? null,
+        password_updated_at: credMeta?.updated_at ?? null,
+        cost_limit_usd: limit,
+        cost_limit_period: period,
+      },
       credit: {
         limit_usd: limit,
         period,
@@ -958,7 +972,49 @@ async function handlePortalArea(
       },
       lifetime: stats.lifetime,
       periods: stats.periods,
+      models: getClientModels(client.name),
+      recent: getClientRecent(client.name, 20),
     }))
+    return
+  }
+
+  // Update this client's editable personal info.
+  if (pathname === '/portal/profile') {
+    if (method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST' })
+      res.end()
+      return
+    }
+    let body: Buffer
+    try {
+      body = await readBody(req)
+    } catch {
+      res.writeHead(413, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Payload too large' }))
+      return
+    }
+    let payload: { display_name?: string; email?: string }
+    try {
+      payload = JSON.parse(body.toString('utf-8'))
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON' }))
+      return
+    }
+    let saved
+    try {
+      saved = setClientProfile(client.name, {
+        display_name: payload.display_name,
+        email: payload.email,
+      })
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
+      return
+    }
+    log('info', `Client "${client.name}" updated their profile`)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ display_name: saved.display_name, email: saved.email }))
     return
   }
 
