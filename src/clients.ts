@@ -699,3 +699,94 @@ fi
 exec claude "$@"
 `
 }
+
+// ── One-line installers ──
+// Designed to be run via `curl -fsSL <url> | bash` (macOS/Linux) or
+// `irm <url> | iex` (Windows). Piping into the shell avoids the friction of a
+// downloaded file: no Gatekeeper quarantine, no chmod, no Unblock-File / execution
+// policy change, and no sudo (installs into a user-writable dir).
+
+export function buildUnixInstaller(opts: LauncherOptions): string {
+  const launcher = buildLauncherScript(opts)
+  const DELIM = '__CCG_LAUNCHER_PAYLOAD__'
+  return `#!/bin/bash
+# CC Gateway quick installer (macOS / Linux)
+# Run with:  curl -fsSL "<gateway>/portal/install.sh?t=..." | bash
+set -e
+
+INSTALL_DIR="$HOME/.local/bin"
+mkdir -p "$INSTALL_DIR"
+
+# Write the launcher (token baked in). Heredoc is quoted so nothing expands.
+cat > "$INSTALL_DIR/ccg" <<'${DELIM}'
+${launcher}${DELIM}
+chmod +x "$INSTALL_DIR/ccg"
+
+# Make sure ~/.local/bin is on PATH for future shells.
+case "$SHELL" in
+  */zsh)  RC_FILE="\${ZDOTDIR:-$HOME}/.zshrc" ;;
+  */bash) RC_FILE="$HOME/.bashrc" ;;
+  */fish) RC_FILE="\${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+  *)      RC_FILE="$HOME/.profile" ;;
+esac
+ON_PATH=0
+case ":$PATH:" in *":$INSTALL_DIR:"*) ON_PATH=1 ;; esac
+if [ "$ON_PATH" = "0" ] && [ -n "$RC_FILE" ]; then
+  mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null || true
+  if ! grep -q "# cc-gateway path" "$RC_FILE" 2>/dev/null; then
+    if [ "\${SHELL##*/}" = "fish" ]; then
+      printf 'fish_add_path %s # cc-gateway path\\n' "$INSTALL_DIR" >> "$RC_FILE" 2>/dev/null || true
+    else
+      printf 'export PATH="%s:$PATH" # cc-gateway path\\n' "$INSTALL_DIR" >> "$RC_FILE" 2>/dev/null || true
+    fi
+  fi
+fi
+
+echo ""
+echo "✅ Installed 'ccg' to $INSTALL_DIR"
+echo ""
+if [ "$ON_PATH" = "0" ]; then
+  echo "   Open a NEW terminal (or run: source $RC_FILE), then:"
+else
+  echo "   Now run:"
+fi
+echo "     ccg            # start Claude Code through the gateway"
+echo "     ccg hijack     # make 'claude' route through the gateway too"
+echo "     ccg status     # check the connection"
+echo ""
+echo "   Run right now without reopening:  \\"$INSTALL_DIR/ccg\\""
+`
+}
+
+export function buildPowerShellInstaller(opts: LauncherOptions): string {
+  const launcher = buildPowerShellLauncherScript(opts)
+  // base64 to sidestep PowerShell here-string nesting collisions.
+  const b64 = Buffer.from(launcher, 'utf8').toString('base64')
+  return `# CC Gateway quick installer (Windows / PowerShell)
+# Run with:  irm "<gateway>/portal/install.ps1?t=..." | iex
+$ErrorActionPreference = "Stop"
+
+$dir = Join-Path $env:LOCALAPPDATA "ccg-bin"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+$b64 = "${b64}"
+$content = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+Set-Content -Path (Join-Path $dir "ccg.ps1") -Value $content -Encoding UTF8
+
+$cmd = '@echo off' + [Environment]::NewLine + 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ccg.ps1" %*'
+Set-Content -Path (Join-Path $dir "ccg.cmd") -Value $cmd -Encoding ASCII
+
+$userPath = [Environment]::GetEnvironmentVariable("PATH","User"); if (-not $userPath) { $userPath = "" }
+if (($userPath -split ';') -notcontains $dir) {
+  [Environment]::SetEnvironmentVariable("PATH", ($dir + ';' + $userPath), "User")
+}
+
+Write-Host ""
+Write-Host "Installed 'ccg' to $dir"
+Write-Host ""
+Write-Host "  Open a NEW terminal, then run:"
+Write-Host "    ccg            # start Claude Code through the gateway"
+Write-Host "    ccg hijack     # make 'claude' route through the gateway too"
+Write-Host "    ccg status     # check the connection"
+`
+}

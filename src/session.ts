@@ -148,3 +148,21 @@ export function setPortalCookieHeader(token: string, secure: boolean): string {
 export function clearPortalCookieHeader(): string {
   return `${PORTAL_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/portal; Max-Age=0`
 }
+
+// ── One-line-install grant ──
+// A short-lived signed token (carried in the install URL) that authorizes
+// /portal/install.sh|.ps1 without a cookie, so the command works under curl|bash.
+// Same {c,e} shape as the portal cookie, so verifyPortalToken validates it too.
+
+const INSTALL_GRANT_TTL_MS = 30 * 60 * 1000  // 30 minutes
+
+export function createInstallGrant(clientName: string): string {
+  const payload: PortalPayload = { c: clientName, e: Date.now() + INSTALL_GRANT_TTL_MS }
+  const body = b64url(Buffer.from(JSON.stringify(payload), 'utf-8'))
+  const sig = sign(body)
+  return `${body}.${sig}`
+}
+
+export function verifyInstallGrant(token: string): PortalPayload | null {
+  return verifyPortalToken(token)
+}

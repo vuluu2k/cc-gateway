@@ -3,14 +3,7 @@
 // activity), rotate their password, and follow a detailed install guide or grab
 // their launcher. Everything is scoped to the one authenticated client.
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
+import { i18nHead, langSwitcher, icon } from './i18n.js'
 
 const SHARED_HEAD_STYLE = `
   :root {
@@ -38,20 +31,24 @@ const SHARED_HEAD_STYLE = `
   .error { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); color: var(--err); padding: 10px 12px; border-radius: 6px; font-size: 13px; }
 `
 
-export function renderPortalLogin(error?: string): string {
-  const errBlock = error ? `<div class="error" style="margin-bottom:8px">${escapeHtml(error)}</div>` : ''
+export function renderPortalLogin(errorKey?: string): string {
+  const errBlock = errorKey
+    ? `<div class="error" data-i18n="${errorKey}" style="margin-bottom:8px"></div>`
+    : ''
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>CC Gateway — Client Portal</title>
+<title data-i18n="plogin.title">CC Gateway — Client Portal</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+${i18nHead()}
 <style>
 ${SHARED_HEAD_STYLE}
   body { min-height: 100vh; display: flex; align-items: center; justify-content: center;
     background: radial-gradient(900px 500px at 50% -10%, #161b22 0%, var(--bg) 60%); }
   .box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 32px; width: 380px; max-width: 90vw; }
-  .brand { font-weight: 700; font-size: 15px; margin-bottom: 18px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .brand { font-weight: 700; font-size: 15px; }
   .brand .dot { color: var(--accent); }
   h1 { font-size: 18px; margin: 0 0 6px; }
   p.sub { color: var(--muted); font-size: 13px; margin: 0 0 22px; }
@@ -69,16 +66,19 @@ ${SHARED_HEAD_STYLE}
 </head>
 <body>
   <form class="box" method="post" action="/portal/login">
-    <div class="brand">CC <span class="dot">Gateway</span></div>
-    <h1>Client Portal</h1>
-    <p class="sub">Sign in with the client name and password your admin gave you.</p>
+    <div class="topbar">
+      <div class="brand">CC <span class="dot">Gateway</span></div>
+      ${langSwitcher('padding:6px 8px')}
+    </div>
+    <h1 data-i18n="plogin.h1">Client Portal</h1>
+    <p class="sub" data-i18n="plogin.sub">Sign in with the client name and password your admin gave you.</p>
     ${errBlock}
-    <label for="name">Client name</label>
-    <input id="name" name="name" autocomplete="username" autofocus required placeholder="e.g. alice" />
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="your password" />
-    <button type="submit" class="primary">Sign in</button>
-    <a class="back" href="/">← Back to home</a>
+    <label for="name" data-i18n="plogin.name">Client name</label>
+    <input id="name" name="name" autocomplete="username" autofocus required data-i18n-ph="plogin.namePh" />
+    <label for="password" data-i18n="plogin.password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required data-i18n-ph="plogin.passwordPh" />
+    <button type="submit" class="primary" data-i18n="common.signin">Sign in</button>
+    <a class="back" href="/" data-i18n="common.back">← Back to home</a>
   </form>
 </body>
 </html>`
@@ -89,8 +89,9 @@ export function renderPortal(): string {
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>CC Gateway — Client Portal</title>
+<title data-i18n="plogin.title">CC Gateway — Client Portal</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+${i18nHead()}
 <style>
 ${SHARED_HEAD_STYLE}
   header {
@@ -99,6 +100,7 @@ ${SHARED_HEAD_STYLE}
     background: var(--panel); position: sticky; top: 0; z-index: 20;
   }
   header .left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  header .right { display: flex; align-items: center; gap: 10px; }
   header .avatar {
     width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
     background: linear-gradient(135deg, #1f6feb, #58a6ff); color: #fff;
@@ -186,22 +188,25 @@ ${SHARED_HEAD_STYLE}
       <div class="sub" id="headerSub"></div>
     </div>
   </div>
-  <form action="/portal/logout" method="post"><button type="submit">Logout</button></form>
+  <div class="right">
+    ${langSwitcher('padding:6px 8px')}
+    <form action="/portal/logout" method="post"><button type="submit" data-i18n="common.logout">Logout</button></form>
+  </div>
 </header>
 <nav class="tabs" id="tabs">
-  <a href="#overview" class="active">Overview</a>
-  <a href="#profile">Profile</a>
-  <a href="#usage">Usage</a>
-  <a href="#install">Install guide</a>
-  <a href="#security">Security</a>
+  <a href="#overview" class="active" data-i18n="portal.tab.overview">Overview</a>
+  <a href="#profile" data-i18n="portal.tab.profile">Profile</a>
+  <a href="#usage" data-i18n="portal.tab.usage">Usage</a>
+  <a href="#install" data-i18n="portal.tab.install">Install guide</a>
+  <a href="#security" data-i18n="portal.tab.security">Security</a>
 </nav>
 <main>
   <!-- Overview -->
   <section id="overview" class="block">
-    <h2 class="section-title">Overview</h2>
+    <h2 class="section-title" data-i18n="portal.sec.overview">Overview</h2>
     <div class="grid">
       <div class="card credit-card">
-        <h3>Your credit</h3>
+        <h3 data-i18n="portal.credit.h">Your credit</h3>
         <div id="creditBig" class="credit-big">…</div>
         <div id="creditSub" class="credit-sub"></div>
         <div class="meter" id="creditMeterWrap"><span id="creditMeter"></span></div>
@@ -213,32 +218,32 @@ ${SHARED_HEAD_STYLE}
 
   <!-- Profile -->
   <section id="profile" class="block">
-    <h2 class="section-title">Profile &amp; account</h2>
+    <h2 class="section-title" data-i18n="portal.sec.profile">Profile &amp; account</h2>
     <div class="two-col">
       <div class="card">
-        <h3>Personal info</h3>
-        <p class="muted" style="margin:0 0 14px;font-size:12px">Optional — helps your admin recognise you. Saved to this gateway only.</p>
+        <h3 data-i18n="portal.profile.h">Personal info</h3>
+        <p class="muted" style="margin:0 0 14px;font-size:12px" data-i18n="portal.profile.note"></p>
         <div id="profileMsg" style="display:none;margin-bottom:10px"></div>
-        <label class="field" for="pfDisplay">Display name</label>
-        <input class="text" id="pfDisplay" maxlength="64" placeholder="e.g. Alice Nguyen" style="margin-bottom:12px" />
-        <label class="field" for="pfEmail">Email</label>
+        <label class="field" for="pfDisplay" data-i18n="portal.profile.display">Display name</label>
+        <input class="text" id="pfDisplay" maxlength="64" data-i18n-ph="portal.profile.displayPh" style="margin-bottom:12px" />
+        <label class="field" for="pfEmail" data-i18n="portal.profile.email">Email</label>
         <input class="text" id="pfEmail" maxlength="254" type="email" placeholder="you@example.com" style="margin-bottom:14px" />
-        <button id="pfSave" class="primary" type="button">Save profile</button>
+        <button id="pfSave" class="primary" type="button" data-i18n="portal.profile.save">Save profile</button>
       </div>
       <div class="card">
-        <h3>Account</h3>
+        <h3 data-i18n="portal.account.h">Account</h3>
         <div class="kv">
-          <div class="k">Client name</div><div class="v" id="acName">—</div>
-          <div class="k">Plan / limit</div><div class="v" id="acPlan">—</div>
-          <div class="k">Member since</div><div class="v" id="acSince">—</div>
-          <div class="k">Password set</div><div class="v" id="acPwUpdated">—</div>
+          <div class="k" data-i18n="portal.account.name">Client name</div><div class="v" id="acName">—</div>
+          <div class="k" data-i18n="portal.account.plan">Plan / limit</div><div class="v" id="acPlan">—</div>
+          <div class="k" data-i18n="portal.account.since">Member since</div><div class="v" id="acSince">—</div>
+          <div class="k" data-i18n="portal.account.pwSet">Password set</div><div class="v" id="acPwUpdated">—</div>
         </div>
-        <h3 style="margin:18px 0 8px">API token</h3>
-        <p class="muted" style="margin:0 0 8px;font-size:12px">Used by your launcher and for manual setup. Keep it secret.</p>
+        <h3 style="margin:18px 0 8px" data-i18n="portal.token.h">API token</h3>
+        <p class="muted" style="margin:0 0 8px;font-size:12px" data-i18n="portal.token.note"></p>
         <div class="snippet-block">
           <pre class="snippet" id="acToken">••••••••</pre>
-          <button id="acTokenReveal" type="button" class="copy-btn" style="right:74px">Reveal</button>
-          <button id="acTokenCopy" type="button" class="copy-btn">Copy</button>
+          <button id="acTokenReveal" type="button" class="copy-btn" style="right:74px" data-i18n="portal.token.reveal">Reveal</button>
+          <button id="acTokenCopy" type="button" class="copy-btn" data-i18n="common.copy">Copy</button>
         </div>
       </div>
     </div>
@@ -246,18 +251,18 @@ ${SHARED_HEAD_STYLE}
 
   <!-- Usage -->
   <section id="usage" class="block">
-    <h2 class="section-title">Usage</h2>
+    <h2 class="section-title" data-i18n="portal.sec.usage">Usage</h2>
     <div class="grid">
       <div class="card">
-        <h3>By period</h3>
+        <h3 data-i18n="portal.usage.byPeriod">By period</h3>
         <div class="table-wrap" id="periodTable"></div>
       </div>
       <div class="card">
-        <h3>By model</h3>
+        <h3 data-i18n="portal.usage.byModel">By model</h3>
         <div class="table-wrap" id="modelsTable"></div>
       </div>
       <div class="card">
-        <h3>Recent activity</h3>
+        <h3 data-i18n="portal.usage.recent">Recent activity</h3>
         <div class="table-wrap" id="recentTable"></div>
       </div>
     </div>
@@ -265,12 +270,9 @@ ${SHARED_HEAD_STYLE}
 
   <!-- Install guide -->
   <section id="install" class="block">
-    <h2 class="section-title">Install guide</h2>
+    <h2 class="section-title" data-i18n="portal.sec.install">Install guide</h2>
     <div class="card">
-      <p class="muted" style="margin:0 0 12px">
-        Pick your platform, download your personal launcher, and follow the steps. The launcher routes
-        Claude Code through this gateway using your token — nothing is written to your shell config until you opt in.
-      </p>
+      <p class="muted" style="margin:0 0 12px" data-i18n="portal.install.intro"></p>
       <div class="controls" style="margin-bottom:6px">
         <select id="dlPlatform">
           <option value="unix">macOS / Linux (bash)</option>
@@ -280,75 +282,83 @@ ${SHARED_HEAD_STYLE}
           <option value="https">https</option>
           <option value="http">http</option>
         </select>
-        <button id="dlBtn" class="primary" type="button">Download launcher</button>
-        <span class="muted" style="font-size:12px">File: <code id="dlFile">cc-…</code></span>
+        <button id="dlBtn" class="primary" type="button" data-i18n="portal.install.download">Download launcher</button>
+        <span class="muted" style="font-size:12px"><span data-i18n="portal.install.file">File:</span> <code id="dlFile">cc-…</code></span>
       </div>
 
-      <p class="step-label">Prerequisite</p>
-      <p class="muted" style="margin:0 0 6px;font-size:12px">Install Claude Code first if you haven't:</p>
-      <div class="snippet-block"><pre class="snippet" id="cmdPrereq">npm install -g @anthropic-ai/claude-code</pre><button class="copy-btn" data-copy="cmdPrereq" type="button">Copy</button></div>
+      <div style="background:linear-gradient(135deg,#11161d,#1a2230);border:1px solid var(--border);border-radius:10px;padding:16px;margin:14px 0 6px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px" data-i18n="portal.install.quickH">⚡ Quick install</div>
+        <p class="muted" style="margin:0 0 10px;font-size:12px" data-i18n="portal.install.quickNote"></p>
+        <div class="snippet-block"><pre class="snippet" id="cmdOneLine">…</pre><button class="copy-btn" data-copy="cmdOneLine" type="button" data-i18n="common.copy">Copy</button></div>
+        <p class="muted" style="margin:8px 0 0;font-size:11px" data-i18n="portal.install.quickExpire"></p>
+      </div>
 
-      <p class="step-label" id="step1Label"><span class="num">1</span>Unblock the file</p>
+      <p class="step-label" data-i18n="portal.install.prereqH">Manual install — prerequisite</p>
+      <p class="muted" style="margin:0 0 6px;font-size:12px" data-i18n="portal.install.prereqNote"></p>
+      <div class="snippet-block"><pre class="snippet" id="cmdPrereq">npm install -g @anthropic-ai/claude-code</pre><button class="copy-btn" data-copy="cmdPrereq" type="button" data-i18n="common.copy">Copy</button></div>
+
+      <p class="step-label" id="step1Label"><span class="num">1</span><span id="step1Text"></span></p>
       <p class="muted" id="step1Meta" style="margin:0 0 6px;font-size:12px"></p>
-      <div class="snippet-block"><pre class="snippet" id="cmdUnblock"></pre><button class="copy-btn" data-copy="cmdUnblock" type="button">Copy</button></div>
+      <div class="snippet-block"><pre class="snippet" id="cmdUnblock"></pre><button class="copy-btn" data-copy="cmdUnblock" type="button" data-i18n="common.copy">Copy</button></div>
 
-      <p class="step-label"><span class="num">2</span>Run the launcher (quick test)</p>
+      <p class="step-label"><span class="num">2</span><span id="step2Text"></span></p>
       <p class="muted" id="step2Meta" style="margin:0 0 6px;font-size:12px"></p>
-      <div class="snippet-block"><pre class="snippet" id="cmdRun"></pre><button class="copy-btn" data-copy="cmdRun" type="button">Copy</button></div>
-      <p class="warnbox">⚠ On first run, Claude Code asks <em>"Do you want to use this custom API?"</em> — choose <strong>Yes</strong>. Picking <em>No (recommended)</em> drops the gateway env vars and falls back to the native endpoint.</p>
+      <div class="snippet-block"><pre class="snippet" id="cmdRun"></pre><button class="copy-btn" data-copy="cmdRun" type="button" data-i18n="common.copy">Copy</button></div>
+      <p class="warnbox" id="s2warn" data-i18n="portal.install.s2warn"></p>
 
-      <p class="step-label"><span class="num">3</span>Install system-wide as <code>ccg</code></p>
+      <p class="step-label"><span class="num">3</span><span id="step3Text"></span></p>
       <p class="muted" id="step3Meta" style="margin:0 0 6px;font-size:12px"></p>
-      <div class="snippet-block"><pre class="snippet" id="cmdInstall"></pre><button class="copy-btn" data-copy="cmdInstall" type="button">Copy</button></div>
+      <div class="snippet-block"><pre class="snippet" id="cmdInstall"></pre><button class="copy-btn" data-copy="cmdInstall" type="button" data-i18n="common.copy">Copy</button></div>
 
-      <p class="step-label"><span class="num">4</span>Route <code>claude</code> through the gateway (optional)</p>
-      <p class="muted" id="step4Meta" style="margin:0 0 6px;font-size:12px">Aliases the native <code>claude</code> command so every call goes through the gateway. New terminals pick it up automatically. Undo with <code>ccg release</code>.</p>
-      <div class="snippet-block"><pre class="snippet" id="cmdHijack">ccg hijack</pre><button class="copy-btn" data-copy="cmdHijack" type="button">Copy</button></div>
+      <p class="step-label"><span class="num">4</span><span data-i18n="portal.install.s4"></span></p>
+      <p class="muted" style="margin:0 0 6px;font-size:12px" data-i18n="portal.install.s4meta"></p>
+      <div class="snippet-block"><pre class="snippet" id="cmdHijack">ccg hijack</pre><button class="copy-btn" data-copy="cmdHijack" type="button" data-i18n="common.copy">Copy</button></div>
 
-      <p class="step-label"><span class="num">5</span>Route VS Code / Cursor extension (optional)</p>
-      <p class="muted" style="margin:0 0 6px;font-size:12px">Persists gateway env vars at the user level so the Claude Code extension also uses the gateway. Restart the editor afterwards. Undo with <code>ccg release-gui</code>.</p>
-      <div class="snippet-block"><pre class="snippet" id="cmdHijackGui">ccg hijack-gui</pre><button class="copy-btn" data-copy="cmdHijackGui" type="button">Copy</button></div>
+      <p class="step-label"><span class="num">5</span><span data-i18n="portal.install.s5"></span></p>
+      <p class="muted" style="margin:0 0 6px;font-size:12px" data-i18n="portal.install.s5meta"></p>
+      <div class="snippet-block"><pre class="snippet" id="cmdHijackGui">ccg hijack-gui</pre><button class="copy-btn" data-copy="cmdHijackGui" type="button" data-i18n="common.copy">Copy</button></div>
 
-      <p class="step-label">All <code>ccg</code> subcommands</p>
+      <p class="step-label" data-i18n="portal.install.subcmds">All ccg subcommands</p>
       <div class="cmd-table">
-        <code>ccg</code><span>Start Claude Code through this gateway.</span>
-        <code>ccg [claude args]</code><span>Forward any flags to Claude Code (e.g. <code>--model</code>, <code>--resume</code>).</span>
-        <code>ccg --print "hi"</code><span>Single-shot non-interactive mode.</span>
-        <code>ccg install</code><span>Install this launcher as the <code>ccg</code> system command.</span>
-        <code>ccg uninstall</code><span>Remove <code>ccg</code> and undo any hijack.</span>
-        <code>ccg hijack</code><span>Alias <code>claude</code> to <code>ccg</code> in your shell.</span>
-        <code>ccg release</code><span>Remove the alias — <code>claude</code> goes back to native.</span>
-        <code>ccg hijack-gui</code><span>Route the VS Code / Cursor extension through the gateway.</span>
-        <code>ccg release-gui</code><span>Undo the GUI routing.</span>
-        <code>ccg native [args]</code><span>Run native <code>claude</code> once, bypassing the gateway.</span>
-        <code>ccg status</code><span>Show gateway URL, hijack state, and a health check.</span>
-        <code>ccg help</code><span>Print this command list in the terminal.</span>
+        <code>ccg</code><span data-i18n="cmd.ccg"></span>
+        <code>ccg [claude args]</code><span data-i18n="cmd.ccgArgs"></span>
+        <code>ccg --print "hi"</code><span data-i18n="cmd.ccgPrint"></span>
+        <code>ccg install</code><span data-i18n="cmd.install"></span>
+        <code>ccg uninstall</code><span data-i18n="cmd.uninstall"></span>
+        <code>ccg hijack</code><span data-i18n="cmd.hijack"></span>
+        <code>ccg release</code><span data-i18n="cmd.release"></span>
+        <code>ccg hijack-gui</code><span data-i18n="cmd.hijackGui"></span>
+        <code>ccg release-gui</code><span data-i18n="cmd.releaseGui"></span>
+        <code>ccg native [args]</code><span data-i18n="cmd.native"></span>
+        <code>ccg status</code><span data-i18n="cmd.status"></span>
+        <code>ccg help</code><span data-i18n="cmd.help"></span>
       </div>
 
-      <p class="step-label">Manual setup (no launcher)</p>
-      <p class="muted" style="margin:0 0 6px;font-size:12px">Prefer to wire it yourself? Set these environment variables before running <code>claude</code>:</p>
-      <div class="snippet-block"><pre class="snippet" id="cmdManual"></pre><button class="copy-btn" data-copy="cmdManual" type="button">Copy</button></div>
+      <p class="step-label" data-i18n="portal.install.manualH">Manual setup (no launcher)</p>
+      <p class="muted" style="margin:0 0 6px;font-size:12px" data-i18n="portal.install.manualNote"></p>
+      <div class="snippet-block"><pre class="snippet" id="cmdManual"></pre><button class="copy-btn" data-copy="cmdManual" type="button" data-i18n="common.copy">Copy</button></div>
     </div>
   </section>
 
   <!-- Security -->
   <section id="security" class="block">
-    <h2 class="section-title">Security</h2>
+    <h2 class="section-title" data-i18n="portal.sec.security">Security</h2>
     <div class="card" style="max-width:420px">
-      <h3>Change password</h3>
-      <p class="muted" style="margin:0 0 12px">Update the password you use to sign in to this portal.</p>
+      <h3 data-i18n="portal.sec.changePw">Change password</h3>
+      <p class="muted" style="margin:0 0 12px" data-i18n="portal.sec.changePwNote"></p>
       <div id="pwMsg" style="display:none;margin-bottom:10px"></div>
       <div style="display:grid;gap:10px">
-        <input class="text" id="pwCurrent" type="password" autocomplete="current-password" placeholder="Current password" />
-        <input class="text" id="pwNew" type="password" autocomplete="new-password" placeholder="New password (min 8 chars)" />
-        <input class="text" id="pwConfirm" type="password" autocomplete="new-password" placeholder="Confirm new password" />
-        <div><button id="pwBtn" class="primary" type="button">Update password</button></div>
+        <input class="text" id="pwCurrent" type="password" autocomplete="current-password" data-i18n-ph="portal.sec.current" />
+        <input class="text" id="pwNew" type="password" autocomplete="new-password" data-i18n-ph="portal.sec.new" />
+        <input class="text" id="pwConfirm" type="password" autocomplete="new-password" data-i18n-ph="portal.sec.confirm" />
+        <div><button id="pwBtn" class="primary" type="button" data-i18n="portal.sec.update">Update password</button></div>
       </div>
     </div>
   </section>
 </main>
 <script>
 (() => {
+  const t = (k, v) => (window.t ? window.t(k, v) : k);
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -369,19 +379,20 @@ ${SHARED_HEAD_STYLE}
   const shortModel = (m) => !m ? '—' : m.replace(/^claude-/, '').replace(/-\\d{8}$/, '');
   const fmtAgo = (ts) => {
     const d = Math.max(0, Date.now() - ts);
-    if (d < 60000) return Math.floor(d/1000) + 's ago';
-    if (d < 3600000) return Math.floor(d/60000) + 'm ago';
-    if (d < 86400000) return Math.floor(d/3600000) + 'h ago';
-    return Math.floor(d/86400000) + 'd ago';
+    if (d < 60000) return Math.floor(d/1000) + 's';
+    if (d < 3600000) return Math.floor(d/60000) + 'm';
+    if (d < 86400000) return Math.floor(d/3600000) + 'h';
+    return Math.floor(d/86400000) + 'd';
   };
   const fmtDate = (ts) => !ts ? '—' : new Date(ts).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
-  const periodLabel = { lifetime: 'lifetime', monthly: 'this month', daily: 'today' };
+  const periodLabel = (p) => t('portal.period.' + p);
 
-  let CLIENT = '', TOKEN = '', GATEWAY = location.host, tokenShown = false;
+  let CLIENT = '', TOKEN = '', GATEWAY = location.host, INSTALL_TOKEN = '', tokenShown = false;
 
   const render = (d) => {
     CLIENT = d.name; TOKEN = d.token || '';
     GATEWAY = d.gateway_addr || location.host;
+    INSTALL_TOKEN = d.install_token || '';
     const display = (d.profile && d.profile.display_name) || d.name;
     document.getElementById('headerName').textContent = display;
     document.getElementById('headerSub').textContent = '@' + d.name;
@@ -395,37 +406,37 @@ ${SHARED_HEAD_STYLE}
     const meter = document.getElementById('creditMeter');
     const used = document.getElementById('creditUsed');
     if (c.limit_usd == null) {
-      big.textContent = 'Unlimited';
-      sub.textContent = 'No cost limit set for your account.';
+      big.textContent = t('portal.credit.unlimited');
+      sub.textContent = t('portal.credit.noLimit');
       meterWrap.style.display = 'none';
-      used.textContent = 'Used ' + fmtCost(c.used_usd) + ' so far.';
+      used.textContent = t('portal.credit.usedSoFar', { used: fmtCost(c.used_usd) });
     } else {
       meterWrap.style.display = '';
-      big.textContent = fmtCost(c.remaining_usd) + ' left';
-      sub.textContent = 'of ' + fmtCost(c.limit_usd) + ' credit (' + (periodLabel[c.period] || c.period) + ')';
+      big.textContent = fmtCost(c.remaining_usd) + t('portal.credit.leftSuffix');
+      sub.textContent = t('portal.credit.ofCredit', { limit: fmtCost(c.limit_usd), period: periodLabel(c.period) });
       const pct = c.limit_usd > 0 ? Math.min(100, (c.used_usd / c.limit_usd) * 100) : 0;
       meter.style.width = pct + '%';
       meter.className = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
-      used.textContent = 'Used ' + fmtCost(c.used_usd) + ' of ' + fmtCost(c.limit_usd) + ' (' + pct.toFixed(0) + '%).';
+      used.textContent = t('portal.credit.usedOf', { used: fmtCost(c.used_usd), limit: fmtCost(c.limit_usd), pct: pct.toFixed(0) });
     }
 
     // Lifetime stats
     const lt = d.lifetime;
     document.getElementById('lifetimeStats').innerHTML = [
-      ['Total requests', fmtNum(lt.total)],
-      ['Total cost', fmtCost(lt.costUsd)],
-      ['Input tokens', fmtTokens(lt.inputTokens)],
-      ['Output tokens', fmtTokens(lt.outputTokens)],
-      ['Cache read', fmtTokens(lt.cacheReadTokens)],
-      ['Last active', lt.lastSeen ? fmtAgo(lt.lastSeen) : '—'],
-    ].map(([label, value]) => '<div class="card stat"><div class="value">' + value + '</div><div class="label">' + label + '</div></div>').join('');
+      ['portal.stat.requests', fmtNum(lt.total)],
+      ['portal.stat.cost', fmtCost(lt.costUsd)],
+      ['portal.stat.input', fmtTokens(lt.inputTokens)],
+      ['portal.stat.output', fmtTokens(lt.outputTokens)],
+      ['portal.stat.cacheRead', fmtTokens(lt.cacheReadTokens)],
+      ['portal.stat.lastActive', lt.lastSeen ? fmtAgo(lt.lastSeen) : '—'],
+    ].map(([key, value]) => '<div class="card stat"><div class="value">' + value + '</div><div class="label">' + esc(t(key)) + '</div></div>').join('');
 
     // Account
     const a = d.account || {};
     document.getElementById('acName').textContent = d.name;
     document.getElementById('acPlan').textContent = a.cost_limit_usd == null
-      ? 'Unlimited'
-      : fmtCost(a.cost_limit_usd) + ' / ' + (a.cost_limit_period || 'lifetime');
+      ? t('portal.credit.unlimited')
+      : fmtCost(a.cost_limit_usd) + ' / ' + periodLabel(a.cost_limit_period || 'lifetime');
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
 
@@ -434,12 +445,12 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('pfEmail').value = (d.profile && d.profile.email) || '';
 
     // Periods
-    document.getElementById('periodTable').innerHTML = renderUsageTable(d.periods || []);
+    document.getElementById('periodTable').innerHTML = renderPeriodTable(d.periods || []);
 
     // Models
     const models = d.models || [];
     document.getElementById('modelsTable').innerHTML = models.length
-      ? '<table><thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache</th><th class="num">Cost</th></tr></thead><tbody>'
+      ? '<table><thead><tr><th>' + esc(t('th.model')) + '</th><th class="num">' + esc(t('th.calls')) + '</th><th class="num">' + esc(t('th.input')) + '</th><th class="num">' + esc(t('th.output')) + '</th><th class="num">' + esc(t('th.cache')) + '</th><th class="num">' + esc(t('th.cost')) + '</th></tr></thead><tbody>'
         + models.map(m => '<tr><td><strong>' + esc(shortModel(m.model)) + '</strong></td>'
           + '<td class="num">' + fmtNum(m.total) + '</td>'
           + '<td class="num">' + fmtTokens(m.inputTokens) + '</td>'
@@ -447,12 +458,12 @@ ${SHARED_HEAD_STYLE}
           + '<td class="num">' + fmtTokens((m.cacheReadTokens||0)+(m.cacheCreationTokens||0)) + '</td>'
           + '<td class="num"><strong>' + fmtCost(m.costUsd) + '</strong></td></tr>').join('')
         + '</tbody></table>'
-      : '<p class="muted" style="margin:0">No model usage recorded yet.</p>';
+      : '<p class="muted" style="margin:0">' + esc(t('portal.usage.noModel')) + '</p>';
 
     // Recent
     const recent = d.recent || [];
     document.getElementById('recentTable').innerHTML = recent.length
-      ? '<table><thead><tr><th>When</th><th>Model</th><th>Status</th><th class="num">Dur</th><th class="num">In</th><th class="num">Out</th><th class="num">Cost</th><th>Message</th></tr></thead><tbody>'
+      ? '<table><thead><tr><th>' + esc(t('th.when')) + '</th><th>' + esc(t('th.model')) + '</th><th>' + esc(t('th.status')) + '</th><th class="num">' + esc(t('th.dur')) + '</th><th class="num">' + esc(t('th.in')) + '</th><th class="num">' + esc(t('th.out')) + '</th><th class="num">' + esc(t('th.cost')) + '</th><th>' + esc(t('th.message')) + '</th></tr></thead><tbody>'
         + recent.map(r => {
           const cls = r.status >= 500 ? 'err' : r.status >= 400 ? 'warn' : 'ok';
           const hasUsage = r.inputTokens || r.outputTokens;
@@ -466,14 +477,14 @@ ${SHARED_HEAD_STYLE}
             + '<td class="muted" title="' + esc(r.userMessage||'') + '" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (esc(r.userMessage||'') || '—') + '</td></tr>';
         }).join('')
         + '</tbody></table>'
-      : '<p class="muted" style="margin:0">No requests yet.</p>';
+      : '<p class="muted" style="margin:0">' + esc(t('portal.usage.noReq')) + '</p>';
 
     updateInstall();
   };
 
-  const renderUsageTable = (periods) => {
-    if (!periods.length) return '<p class="muted" style="margin:0">No usage yet.</p>';
-    return '<table><thead><tr><th>Period</th><th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cost</th></tr></thead><tbody>'
+  const renderPeriodTable = (periods) => {
+    if (!periods.length) return '<p class="muted" style="margin:0">' + esc(t('portal.usage.noUsage')) + '</p>';
+    return '<table><thead><tr><th>' + esc(t('th.period')) + '</th><th class="num">' + esc(t('th.calls')) + '</th><th class="num">' + esc(t('th.input')) + '</th><th class="num">' + esc(t('th.output')) + '</th><th class="num">' + esc(t('th.cost')) + '</th></tr></thead><tbody>'
       + periods.map(p => '<tr><td><strong>' + esc(p.label) + '</strong></td>'
         + '<td class="num">' + fmtNum(p.total) + '</td>'
         + '<td class="num">' + fmtTokens(p.inputTokens) + '</td>'
@@ -491,23 +502,33 @@ ${SHARED_HEAD_STYLE}
     const fname = isWin ? 'cc-' + name + '.ps1' : 'cc-' + name;
     document.getElementById('dlFile').textContent = fname;
     const gw = scheme + '://' + GATEWAY;
+
+    // One-line install command
+    const oneLine = document.getElementById('cmdOneLine');
+    if (INSTALL_TOKEN) {
+      const base = location.origin + '/portal/install.' + (isWin ? 'ps1' : 'sh')
+        + '?t=' + encodeURIComponent(INSTALL_TOKEN) + '&scheme=' + scheme;
+      oneLine.textContent = isWin ? 'irm "' + base + '" | iex' : 'curl -fsSL "' + base + '" | bash';
+    } else {
+      oneLine.textContent = t('portal.install.reloadLink');
+    }
+
+    document.getElementById('step1Text').textContent = t(isWin ? 'portal.install.s1.win' : 'portal.install.s1.unix');
+    document.getElementById('step1Meta').textContent = t(isWin ? 'portal.install.s1meta.win' : 'portal.install.s1meta.unix');
+    document.getElementById('step2Text').textContent = t('portal.install.s2');
+    document.getElementById('step2Meta').textContent = t(isWin ? 'portal.install.s2meta.win' : 'portal.install.s2meta.unix');
+    document.getElementById('step3Text').textContent = t('portal.install.s3');
+    document.getElementById('step3Meta').textContent = t(isWin ? 'portal.install.s3meta.win' : 'portal.install.s3meta.unix');
+
     if (isWin) {
-      document.getElementById('step1Label').innerHTML = '<span class="num">1</span>Allow scripts &amp; unblock the file';
-      document.getElementById('step1Meta').innerHTML = 'One-time per machine: allow your user to run local scripts, then strip the Mark-of-the-Web from the download.';
       document.getElementById('cmdUnblock').textContent = 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; Unblock-File .\\\\' + fname;
-      document.getElementById('step2Meta').textContent = 'Run the launcher with PowerShell to verify the gateway connection.';
       document.getElementById('cmdRun').textContent = '.\\\\' + fname;
-      document.getElementById('step3Meta').innerHTML = 'Copies the launcher into <code>%LOCALAPPDATA%\\\\ccg-bin</code> and adds it to your user PATH (open a new terminal afterwards).';
       document.getElementById('cmdInstall').textContent = '.\\\\' + fname + ' install';
       document.getElementById('cmdManual').textContent =
         '$env:ANTHROPIC_BASE_URL = "' + gw + '"\\n$env:ANTHROPIC_API_KEY = "' + (TOKEN || '<your-token>') + '"\\nclaude';
     } else {
-      document.getElementById('step1Label').innerHTML = '<span class="num">1</span>macOS — if Gatekeeper blocks the file';
-      document.getElementById('step1Meta').innerHTML = 'Removes the quarantine attribute browsers add to downloads. Skip on Linux, or if it runs without warning.';
       document.getElementById('cmdUnblock').textContent = 'xattr -d com.apple.quarantine ' + fname;
-      document.getElementById('step2Meta').textContent = 'Make it executable and start Claude Code through the gateway.';
       document.getElementById('cmdRun').textContent = 'chmod +x ' + fname + ' && ./' + fname;
-      document.getElementById('step3Meta').innerHTML = 'Copies the launcher into <code>$PATH</code> so you can run <code>ccg</code> from anywhere.';
       document.getElementById('cmdInstall').textContent = 'chmod +x ' + fname + ' && ./' + fname + ' install';
       document.getElementById('cmdManual').textContent =
         'export ANTHROPIC_BASE_URL="' + gw + '"\\nexport ANTHROPIC_API_KEY="' + (TOKEN || '<your-token>') + '"\\nclaude';
@@ -529,16 +550,15 @@ ${SHARED_HEAD_STYLE}
   document.getElementById('acTokenReveal').addEventListener('click', (e) => {
     tokenShown = !tokenShown;
     document.getElementById('acToken').textContent = tokenShown ? (TOKEN || '—') : '••••••••';
-    e.currentTarget.textContent = tokenShown ? 'Hide' : 'Reveal';
+    e.currentTarget.textContent = tokenShown ? t('portal.token.hide') : t('portal.token.reveal');
   });
 
-  // ── Copy buttons (generic, via data-copy or token) ──
+  // ── Copy buttons ──
   const copyText = async (btn, text) => {
     try {
       await navigator.clipboard.writeText(text);
-      const old = btn.textContent;
-      btn.textContent = 'Copied'; btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
+      btn.textContent = t('common.copied'); btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = t('common.copy'); btn.classList.remove('copied'); }, 1500);
     } catch {}
   };
   document.querySelectorAll('[data-copy]').forEach(btn => {
@@ -549,9 +569,7 @@ ${SHARED_HEAD_STYLE}
   // ── Profile save ──
   const profileMsg = (text, ok) => {
     const el = document.getElementById('profileMsg');
-    el.style.display = 'block';
-    el.className = ok ? 'ok-msg' : 'error';
-    el.textContent = text;
+    el.style.display = 'block'; el.className = ok ? 'ok-msg' : 'error'; el.textContent = text;
   };
   document.getElementById('pfSave').addEventListener('click', async () => {
     const btn = document.getElementById('pfSave');
@@ -566,7 +584,7 @@ ${SHARED_HEAD_STYLE}
       });
       if (res.ok) {
         const d = await res.json();
-        profileMsg('Profile saved.', true);
+        profileMsg(t('portal.profile.saved'), true);
         const display = d.display_name || CLIENT;
         document.getElementById('headerName').textContent = display;
         document.getElementById('avatar').textContent = (display[0] || '?').toUpperCase();
@@ -574,26 +592,24 @@ ${SHARED_HEAD_STYLE}
         window.location.href = '/portal';
       } else {
         const err = await res.json().catch(() => ({}));
-        profileMsg(err.error || 'Save failed (' + res.status + ').', false);
+        profileMsg(err.error || ('Error ' + res.status), false);
       }
-    } catch { profileMsg('Network error.', false); }
+    } catch { profileMsg(t('portal.msg.netErr'), false); }
     finally { btn.disabled = false; }
   });
 
   // ── Change password ──
   const pwMsg = (text, ok) => {
     const el = document.getElementById('pwMsg');
-    el.style.display = 'block';
-    el.className = ok ? 'ok-msg' : 'error';
-    el.textContent = text;
+    el.style.display = 'block'; el.className = ok ? 'ok-msg' : 'error'; el.textContent = text;
   };
   document.getElementById('pwBtn').addEventListener('click', async () => {
     const current = document.getElementById('pwCurrent').value;
     const next = document.getElementById('pwNew').value;
     const confirm = document.getElementById('pwConfirm').value;
-    if (!current || !next) { pwMsg('Fill in both current and new password.', false); return; }
-    if (next.length < 8) { pwMsg('New password must be at least 8 characters.', false); return; }
-    if (next !== confirm) { pwMsg('New password and confirmation do not match.', false); return; }
+    if (!current || !next) { pwMsg(t('portal.msg.fillPw'), false); return; }
+    if (next.length < 8) { pwMsg(t('portal.msg.pwLen'), false); return; }
+    if (next !== confirm) { pwMsg(t('portal.msg.pwMatch'), false); return; }
     const btn = document.getElementById('pwBtn');
     btn.disabled = true;
     try {
@@ -602,7 +618,7 @@ ${SHARED_HEAD_STYLE}
         body: JSON.stringify({ current, new: next }),
       });
       if (res.ok) {
-        pwMsg('Password updated.', true);
+        pwMsg(t('portal.msg.pwUpdated'), true);
         document.getElementById('pwCurrent').value = '';
         document.getElementById('pwNew').value = '';
         document.getElementById('pwConfirm').value = '';
@@ -610,9 +626,9 @@ ${SHARED_HEAD_STYLE}
         window.location.href = '/portal';
       } else {
         const err = await res.json().catch(() => ({}));
-        pwMsg(err.error || 'Update failed (' + res.status + ').', false);
+        pwMsg(err.error || ('Error ' + res.status), false);
       }
-    } catch { pwMsg('Network error.', false); }
+    } catch { pwMsg(t('portal.msg.netErr'), false); }
     finally { btn.disabled = false; }
   });
 
@@ -634,7 +650,7 @@ ${SHARED_HEAD_STYLE}
   const load = () => fetch('/portal/me', { headers: { 'Accept': 'application/json' } })
     .then(r => { if (r.status === 401) { window.location.href = '/portal'; return null; } return r.json(); })
     .then(d => { if (d) render(d); })
-    .catch(() => { document.getElementById('creditBig').textContent = 'Error loading data'; });
+    .catch(() => { document.getElementById('creditBig').textContent = t('portal.msg.loadErr'); });
   load();
   setInterval(load, 15000);
 })();

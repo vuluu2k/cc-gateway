@@ -34,8 +34,10 @@ import {
   setPortalCookieHeader,
   clearPortalCookieHeader,
   getPortalSessionFromRequest,
+  createInstallGrant,
+  verifyInstallGrant,
 } from './session.js'
-import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript } from './clients.js'
+import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
 
 const USER_MESSAGE_MAX = 200
@@ -535,14 +537,14 @@ async function handleDashboardArea(
       const password = params.get('password') || ''
       if (!username || !password) {
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(renderLogin('Username and password required'))
+        res.end(renderLogin('err.adminCreds'))
         return
       }
       const user = authenticateUser(username, password)
       if (!user) {
         log('warn', `Failed login for "${username}" from ${req.socket.remoteAddress}`)
         res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(renderLogin('Invalid username or password'))
+        res.end(renderLogin('err.adminInvalid'))
         return
       }
       const cookie = createSessionCookie(user.username)
@@ -890,7 +892,7 @@ async function handlePortalArea(
       if (!pwOk || !inConfig) {
         log('warn', `Failed portal login for "${name}" from ${req.socket.remoteAddress}`)
         res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(renderPortalLogin('Invalid client name or password.'))
+        res.end(renderPortalLogin('err.portalInvalid'))
         return
       }
       const cookie = createPortalCookie(name)
@@ -914,6 +916,51 @@ async function handlePortalArea(
       'Set-Cookie': clearPortalCookieHeader(),
     })
     res.end()
+    return
+  }
+
+  // One-line installers — authorized by a short-lived signed grant in the URL
+  // (no cookie), so they work under `curl … | bash` and `irm … | iex`. The
+  // response is plain text meant to be piped straight into a shell.
+  if (pathname === '/portal/install.sh' || pathname === '/portal/install.ps1') {
+    if (method !== 'GET') {
+      res.writeHead(405, { Allow: 'GET' })
+      res.end()
+      return
+    }
+    const query = new URLSearchParams((req.url || '').split('?')[1] || '')
+    const grant = query.get('t') || ''
+    const g = grant ? verifyInstallGrant(grant) : null
+    if (!g) {
+      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('# Invalid or expired install link. Open the portal and copy a fresh command.\n')
+      return
+    }
+    const existing = listClients().find((c) => c.name === g.c)
+    if (!existing) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('# Client no longer exists.\n')
+      return
+    }
+    const scheme = query.get('scheme') === 'http'
+      ? 'http'
+      : query.get('scheme') === 'https'
+        ? 'https'
+        : (isSecureRequest(req) ? 'https' : 'http')
+    const gatewayAddr =
+      (query.get('gateway_addr') || '').trim() ||
+      (typeof req.headers.host === 'string' ? req.headers.host : 'localhost:8443')
+    const opts = {
+      name: existing.name,
+      token: existing.token,
+      gatewayAddr,
+      scheme: scheme as 'http' | 'https',
+    }
+    const isWindows = pathname.endsWith('.ps1')
+    const script = isWindows ? buildPowerShellInstaller(opts) : buildUnixInstaller(opts)
+    log('info', `Client "${existing.name}" fetched ${isWindows ? 'PowerShell' : 'shell'} one-line installer`)
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' })
+    res.end(script)
     return
   }
 
@@ -957,6 +1004,7 @@ async function handlePortalArea(
       name: client.name,
       token: client.token,
       gateway_addr: typeof req.headers.host === 'string' ? req.headers.host : '',
+      install_token: createInstallGrant(client.name),
       profile: { display_name: profile.display_name, email: profile.email },
       account: {
         created_at: credMeta?.created_at ?? null,
