@@ -393,12 +393,14 @@ ${SHARED_HEAD_STYLE}
   const fmtDate = (ts) => !ts ? '—' : new Date(ts).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
   const periodLabel = (p) => t('portal.period.' + p);
 
-  let CLIENT = '', TOKEN = '', GATEWAY = location.host, INSTALL_TOKEN = '', tokenShown = false;
+  let CLIENT = '', TOKEN = '', GATEWAY = location.host, INSTALL_TOKEN = '', tokenShown = false, firstRender = true;
 
   const render = (d) => {
     CLIENT = d.name; TOKEN = d.token || '';
     GATEWAY = d.gateway_addr || location.host;
-    INSTALL_TOKEN = d.install_token || '';
+    // Freeze the install token on first load so the one-line command stays
+    // stable instead of changing on every background refresh.
+    if (firstRender) INSTALL_TOKEN = d.install_token || '';
     const display = (d.profile && d.profile.display_name) || d.name;
     document.getElementById('headerName').textContent = display;
     document.getElementById('headerSub').textContent = '@' + d.name;
@@ -446,9 +448,12 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
 
-    // Profile inputs
-    document.getElementById('pfDisplay').value = (d.profile && d.profile.display_name) || '';
-    document.getElementById('pfEmail').value = (d.profile && d.profile.email) || '';
+    // Profile inputs — seed only on first load so a background refresh doesn't
+    // wipe out what the user is currently typing.
+    if (firstRender) {
+      document.getElementById('pfDisplay').value = (d.profile && d.profile.display_name) || '';
+      document.getElementById('pfEmail').value = (d.profile && d.profile.email) || '';
+    }
 
     // Periods
     document.getElementById('periodTable').innerHTML = renderPeriodTable(d.periods || []);
@@ -485,7 +490,7 @@ ${SHARED_HEAD_STYLE}
         + '</tbody></table>'
       : '<p class="muted" style="margin:0">' + esc(t('portal.usage.noReq')) + '</p>';
 
-    updateInstall();
+    if (firstRender) { updateInstall(); firstRender = false; }
   };
 
   const renderPeriodTable = (periods) => {
@@ -660,7 +665,7 @@ ${SHARED_HEAD_STYLE}
     .then(d => { if (d) render(d); })
     .catch(() => { document.getElementById('creditBig').textContent = t('portal.msg.loadErr'); });
   load();
-  setInterval(load, 15000);
+  setInterval(load, 30000);
 })();
 </script>
 </body>

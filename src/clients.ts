@@ -742,6 +742,17 @@ if [ "$ON_PATH" = "0" ] && [ -n "$RC_FILE" ]; then
   fi
 fi
 
+# Claude Code itself is required — the launcher just wraps it. Install it if missing.
+CLAUDE_OK=1
+if ! command -v claude >/dev/null 2>&1; then
+  CLAUDE_OK=0
+  if command -v npm >/dev/null 2>&1; then
+    echo ""
+    echo "Claude Code not found — installing it (npm install -g @anthropic-ai/claude-code)…"
+    if npm install -g @anthropic-ai/claude-code; then CLAUDE_OK=1; fi
+  fi
+fi
+
 echo ""
 echo "✅ Installed 'ccg' to $INSTALL_DIR"
 echo ""
@@ -755,6 +766,12 @@ echo "     ccg hijack     # make 'claude' route through the gateway too"
 echo "     ccg status     # check the connection"
 echo ""
 echo "   Run right now without reopening:  \\"$INSTALL_DIR/ccg\\""
+if [ "$CLAUDE_OK" = "0" ]; then
+  echo ""
+  echo "⚠ Claude Code is required but not installed. Install it with:"
+  echo "    npm install -g @anthropic-ai/claude-code"
+  echo "  (no npm? install Node.js first: https://nodejs.org)"
+fi
 `
 }
 
@@ -781,6 +798,17 @@ if (($userPath -split ';') -notcontains $dir) {
   [Environment]::SetEnvironmentVariable("PATH", ($dir + ';' + $userPath), "User")
 }
 
+# Claude Code itself is required — install it if missing.
+$claudeOk = $true
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  $claudeOk = $false
+  if (Get-Command npm -ErrorAction SilentlyContinue) {
+    Write-Host ""
+    Write-Host "Claude Code not found - installing (npm install -g @anthropic-ai/claude-code)..."
+    try { npm install -g @anthropic-ai/claude-code; if (Get-Command claude -ErrorAction SilentlyContinue) { $claudeOk = $true } } catch {}
+  }
+}
+
 Write-Host ""
 Write-Host "Installed 'ccg' to $dir"
 Write-Host ""
@@ -788,5 +816,11 @@ Write-Host "  Open a NEW terminal, then run:"
 Write-Host "    ccg            # start Claude Code through the gateway"
 Write-Host "    ccg hijack     # make 'claude' route through the gateway too"
 Write-Host "    ccg status     # check the connection"
+if (-not $claudeOk) {
+  Write-Host ""
+  Write-Host "Claude Code is required but not installed. Install it with:"
+  Write-Host "    npm install -g @anthropic-ai/claude-code"
+  Write-Host "  (no npm? install Node.js first: https://nodejs.org)"
+}
 `
 }

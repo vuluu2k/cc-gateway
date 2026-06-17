@@ -177,7 +177,7 @@ const M: Record<string, Entry> = {
   'portal.install.download': { en: 'Download launcher', vi: 'Tải trình khởi chạy', zh: '下载启动器' },
   'portal.install.file': { en: 'File:', vi: 'Tệp:', zh: '文件：' },
   'portal.install.quickH': { en: '⚡ Quick install — one line, no permissions', vi: '⚡ Cài nhanh — một dòng, không cần cấp quyền', zh: '⚡ 快速安装 — 一行命令，无需授权' },
-  'portal.install.quickNote': { en: 'Paste this into your terminal. No download dialog, no chmod, no Gatekeeper/execution-policy prompts, no sudo.', vi: 'Dán vào terminal. Không hộp thoại tải, không chmod, không hỏi Gatekeeper/execution-policy, không sudo.', zh: '把这条粘贴到终端。无下载对话框、无需 chmod、无 Gatekeeper/执行策略提示、无需 sudo。' },
+  'portal.install.quickNote': { en: "Paste this into your terminal. No download dialog, no chmod, no Gatekeeper/execution-policy prompts, no sudo — and it installs Claude Code for you if it's missing.", vi: 'Dán vào terminal. Không hộp thoại tải, không chmod, không hỏi Gatekeeper/execution-policy, không sudo — và tự cài Claude Code nếu máy chưa có.', zh: '把这条粘贴到终端。无下载对话框、无需 chmod、无 Gatekeeper/执行策略提示、无需 sudo — 如未安装还会自动为你安装 Claude Code。' },
   'portal.install.quickExpire': { en: 'Link is personal and expires in ~30 min — reopen this page for a fresh one.', vi: 'Liên kết là riêng và hết hạn sau ~30 phút — mở lại trang để lấy liên kết mới.', zh: '该链接为个人专属，约 30 分钟后过期 — 重新打开本页可获取新链接。' },
   'portal.install.quickOs': { en: 'Command for {os}. Switch the platform selector above for another OS.', vi: 'Lệnh dành cho {os}. Đổi ô chọn nền tảng ở trên để lấy lệnh cho HĐH khác.', zh: '此命令适用于 {os}。在上方切换平台可获取其他系统的命令。' },
   'os.unix': { en: 'macOS / Linux', vi: 'macOS / Linux', zh: 'macOS / Linux' },
