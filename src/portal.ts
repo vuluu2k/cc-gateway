@@ -163,7 +163,10 @@ ${SHARED_HEAD_STYLE}
   .step-label { margin: 18px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--fg); }
   .step-label .num { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; text-align: center; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; margin-right: 6px; }
   .snippet-block { position: relative; }
-  .snippet { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--fg); margin: 0; overflow-x: auto; white-space: pre; }
+  .snippet { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 64px 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--fg); margin: 0; overflow-x: auto; white-space: pre; scrollbar-width: thin; scrollbar-color: #2c333d var(--bg); }
+  .snippet::-webkit-scrollbar { height: 7px; }
+  .snippet::-webkit-scrollbar-thumb { background: #2c333d; border-radius: 4px; }
+  .snippet.wrap { white-space: pre-wrap; word-break: break-all; overflow-x: visible; }
   .copy-btn { position: absolute; top: 6px; right: 6px; padding: 4px 10px; font-size: 11px; background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
   .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
   .copy-btn.copied { color: var(--ok); border-color: var(--ok); }
@@ -289,7 +292,10 @@ ${SHARED_HEAD_STYLE}
       <div style="background:linear-gradient(135deg,#11161d,#1a2230);border:1px solid var(--border);border-radius:10px;padding:16px;margin:14px 0 6px">
         <div style="font-size:13px;font-weight:600;margin-bottom:4px" data-i18n="portal.install.quickH">⚡ Quick install</div>
         <p class="muted" style="margin:0 0 10px;font-size:12px" data-i18n="portal.install.quickNote"></p>
-        <div class="snippet-block"><pre class="snippet" id="cmdOneLine">…</pre><button class="copy-btn" data-copy="cmdOneLine" type="button" data-i18n="common.copy">Copy</button></div>
+        <div class="muted" style="font-size:11px;margin-bottom:4px" data-i18n="os.unix">macOS / Linux</div>
+        <div class="snippet-block" style="margin-bottom:10px"><pre class="snippet wrap" id="cmdOneLineUnix">…</pre><button class="copy-btn" data-copy="cmdOneLineUnix" type="button" data-i18n="common.copy">Copy</button></div>
+        <div class="muted" style="font-size:11px;margin-bottom:4px" data-i18n="os.win">Windows (PowerShell)</div>
+        <div class="snippet-block"><pre class="snippet wrap" id="cmdOneLineWin">…</pre><button class="copy-btn" data-copy="cmdOneLineWin" type="button" data-i18n="common.copy">Copy</button></div>
         <p class="muted" style="margin:8px 0 0;font-size:11px" data-i18n="portal.install.quickExpire"></p>
       </div>
 
@@ -336,7 +342,7 @@ ${SHARED_HEAD_STYLE}
 
       <p class="step-label" data-i18n="portal.install.manualH">Manual setup (no launcher)</p>
       <p class="muted" style="margin:0 0 6px;font-size:12px" data-i18n="portal.install.manualNote"></p>
-      <div class="snippet-block"><pre class="snippet" id="cmdManual"></pre><button class="copy-btn" data-copy="cmdManual" type="button" data-i18n="common.copy">Copy</button></div>
+      <div class="snippet-block"><pre class="snippet wrap" id="cmdManual"></pre><button class="copy-btn" data-copy="cmdManual" type="button" data-i18n="common.copy">Copy</button></div>
     </div>
   </section>
 
@@ -503,14 +509,16 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('dlFile').textContent = fname;
     const gw = scheme + '://' + GATEWAY;
 
-    // One-line install command
-    const oneLine = document.getElementById('cmdOneLine');
+    // One-line install commands — both OSes shown at once.
+    const unixEl = document.getElementById('cmdOneLineUnix');
+    const winEl = document.getElementById('cmdOneLineWin');
     if (INSTALL_TOKEN) {
-      const base = location.origin + '/portal/install.' + (isWin ? 'ps1' : 'sh')
+      const url = (ext) => location.origin + '/portal/install.' + ext
         + '?t=' + encodeURIComponent(INSTALL_TOKEN) + '&scheme=' + scheme;
-      oneLine.textContent = isWin ? 'irm "' + base + '" | iex' : 'curl -fsSL "' + base + '" | bash';
+      unixEl.textContent = 'curl -fsSL "' + url('sh') + '" | bash';
+      winEl.textContent = 'irm "' + url('ps1') + '" | iex';
     } else {
-      oneLine.textContent = t('portal.install.reloadLink');
+      unixEl.textContent = winEl.textContent = t('portal.install.reloadLink');
     }
 
     document.getElementById('step1Text').textContent = t(isWin ? 'portal.install.s1.win' : 'portal.install.s1.unix');
