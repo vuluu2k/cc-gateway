@@ -753,19 +753,30 @@ if ! command -v claude >/dev/null 2>&1; then
   fi
 fi
 
+# Route the native 'claude' CLI and the VS Code / Cursor extension through the
+# gateway automatically. Both are idempotent and reversible:
+#   undo shell: ccg release   •   undo GUI: ccg release-gui
+"$INSTALL_DIR/ccg" hijack >/dev/null 2>&1 || true
+GUI_OK=0
+if "$INSTALL_DIR/ccg" hijack-gui >/dev/null 2>&1; then GUI_OK=1; fi
+
 echo ""
 echo "✅ Installed 'ccg' to $INSTALL_DIR"
+echo "   • 'claude' now routes through the gateway too (shell alias)"
+if [ "$GUI_OK" = "1" ]; then
+  echo "   • VS Code / Cursor extension routed through the gateway — fully quit & reopen the editor"
+fi
 echo ""
 if [ "$ON_PATH" = "0" ]; then
   echo "   Open a NEW terminal (or run: source $RC_FILE), then:"
 else
-  echo "   Now run:"
+  echo "   Open a NEW terminal (so the 'claude' alias loads), then:"
 fi
-echo "     ccg            # start Claude Code through the gateway"
-echo "     ccg hijack     # make 'claude' route through the gateway too"
-echo "     ccg status     # check the connection"
+echo "     claude         # or 'ccg' — both go through the gateway now"
+echo "     ccg status     # check the connection + routing state"
 echo ""
 echo "   Run right now without reopening:  \\"$INSTALL_DIR/ccg\\""
+echo "   Undo routing anytime:  ccg release   /   ccg release-gui"
 if [ "$CLAUDE_OK" = "0" ]; then
   echo ""
   echo "⚠ Claude Code is required but not installed. Install it with:"
@@ -809,13 +820,24 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   }
 }
 
+# Route the native 'claude' CLI and the VS Code / Cursor extension through the
+# gateway automatically. Both are idempotent and reversible (ccg release / release-gui).
+$ps1 = Join-Path $dir "ccg.ps1"
+try { & $ps1 hijack     | Out-Null } catch {}
+$guiOk = $false
+try { & $ps1 hijack-gui | Out-Null; $guiOk = $true } catch {}
+
 Write-Host ""
 Write-Host "Installed 'ccg' to $dir"
+Write-Host "  - 'claude' now routes through the gateway too (shell alias)"
+if ($guiOk) {
+  Write-Host "  - VS Code / Cursor extension routed through the gateway - fully quit & reopen the editor"
+}
 Write-Host ""
-Write-Host "  Open a NEW terminal, then run:"
-Write-Host "    ccg            # start Claude Code through the gateway"
-Write-Host "    ccg hijack     # make 'claude' route through the gateway too"
-Write-Host "    ccg status     # check the connection"
+Write-Host "  Open a NEW terminal (so the 'claude' alias loads), then run:"
+Write-Host "    claude         # or 'ccg' - both go through the gateway now"
+Write-Host "    ccg status     # check the connection + routing state"
+Write-Host "  Undo routing anytime: ccg release / ccg release-gui"
 if (-not $claudeOk) {
   Write-Host ""
   Write-Host "Claude Code is required but not installed. Install it with:"
