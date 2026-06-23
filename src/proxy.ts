@@ -311,6 +311,21 @@ async function handleRequest(
     (proxyRes) => {
       const status = proxyRes.statusCode || 502
 
+      // Surface upstream throttling distinctly from the gateway's own
+      // cost-limit 429 (handled above). Anthropic returns 429 (rate_limit_error)
+      // or 529 (overloaded) when our shared OAuth account hits its rate cap; the
+      // client retries per retry-after and usually gets 200 on the next attempt,
+      // which is the "429 rồi lại 200" pattern. Logging it explicitly makes the
+      // shared-account throttling visible instead of looking like a cost block.
+      if (status === 429 || status === 529) {
+        const retryAfter = proxyRes.headers['retry-after']
+        log(
+          'warn',
+          `Upstream throttled "${clientName}": ${status} ${method} ${path}` +
+            (retryAfter ? ` (retry-after: ${retryAfter}s)` : ''),
+        )
+      }
+
       const responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
 
