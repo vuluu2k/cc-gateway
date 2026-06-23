@@ -175,25 +175,17 @@ function rewritePromptText(text: string, config: Config, hash: string | null): s
     `OS Version: ${pe.os_version}`,
   )
 
-  // 3 & 4. Path masking — OFF by default. This rewrite is one-directional
-  // (request only): there's no reverse rewrite of the model's response, so the
-  // model echoes the fake path straight back into bash/file tool calls and they
-  // fail on the real machine (e.g. `cd /Users/jack/projects` when the user is
-  // `mac`). Hiding the cwd/home also has near-zero privacy value since the API
-  // already receives the full file contents. Opt in with prompt_env.mask_paths.
-  if (pe.mask_paths) {
-    // 3. Working directory / Primary working directory
-    result = result.replace(
-      /((?:Primary )?[Ww]orking directory:\s*)\/\S+/g,
-      `$1${pe.working_dir}`,
-    )
+  // 3. Working directory / Primary working directory
+  result = result.replace(
+    /((?:Primary )?[Ww]orking directory:\s*)\/\S+/g,
+    `$1${pe.working_dir}`,
+  )
 
-    // 4. Home directory paths: /Users/xxx/, /home/xxx/
-    result = result.replace(
-      /\/(?:Users|home)\/[^/\s]+\//g,
-      `${pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'}`,
-    )
-  }
+  // 4. Home directory paths: /Users/xxx/, /home/xxx/
+  result = result.replace(
+    /\/(?:Users|home)\/[^/\s]+\//g,
+    `${pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'}`,
+  )
 
   return result
 }
