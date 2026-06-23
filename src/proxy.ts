@@ -346,9 +346,10 @@ async function handleRequest(
       const responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
       if (wantRewrite) {
-        // We re-emit decoded, path-rewritten bytes of a different length, so the
-        // upstream content-encoding / content-length no longer describe the body.
-        delete responseHeaders['content-encoding']
+        // We re-emit path-rewritten bytes RE-COMPRESSED with the same
+        // content-encoding (so the wire stays gzip/br/deflate exactly as
+        // upstream sent it), but the byte length changes — drop content-length
+        // and let the response be chunked. content-encoding is kept as-is.
         delete responseHeaders['content-length']
       }
 
@@ -392,24 +393,52 @@ async function handleRequest(
         : encoding === 'br' ? zlib.createBrotliDecompress()
         : encoding === 'deflate' ? zlib.createInflate()
         : null
+      const makeEncoder = (): zlib.Gzip | zlib.BrotliCompress | zlib.Deflate | null =>
+        encoding === 'gzip' ? zlib.createGzip()
+        : encoding === 'br' ? zlib.createBrotliCompress()
+        : encoding === 'deflate' ? zlib.createDeflate()
+        : null
 
       if (wantRewrite) {
+        // upstream → [decoder] → reverse paths → [encoder] → client.
+        // The encoder re-compresses with the SAME content-encoding so the wire
+        // stays gzip/br/deflate; when upstream sent identity, both are null and
+        // plaintext flows straight through.
         const decoder = makeDecoder()
+        const encoder = makeEncoder()
         const replacer = createPathReplacer(reversePairs)
         let ended = false
+
+        // Sink for rewritten plaintext: through the encoder if re-compressing,
+        // else straight to the client.
+        const writeOut = (s: string) => {
+          if (!s) return
+          if (encoder) encoder.write(s)
+          else res.write(s)
+        }
         const onDecoded = (buf: Buffer) => {
           if (parser) parser.feed(buf)
-          const out = replacer.push(buf)
-          if (out) res.write(out)
+          writeOut(replacer.push(buf))
         }
         const done = () => {
           if (ended) return
           ended = true
-          const tail = replacer.flush()
-          if (tail) res.write(tail)
+          writeOut(replacer.flush())
           parser?.end()
-          res.end()
+          // Closing the encoder flushes the final compressed bytes; its 'end'
+          // event ends the client response. Without an encoder, end directly.
+          if (encoder) encoder.end()
+          else res.end()
           finalize()
+        }
+
+        if (encoder) {
+          encoder.on('data', (b: Buffer) => res.write(b))
+          encoder.on('end', () => res.end())
+          encoder.on('error', (err: Error) => {
+            log('error', `Reverse-path encoder failed (${encoding}): ${err.message}`)
+            res.end()
+          })
         }
         if (decoder) {
           decoder.on('data', onDecoded)
