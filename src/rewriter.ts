@@ -1,6 +1,9 @@
 import { createHash, randomBytes } from 'crypto'
+import { StringDecoder } from 'string_decoder'
 import type { Config } from './config.js'
 import { log } from './logger.js'
+
+export type PathPair = { from: string; to: string }
 
 // ── CCH hash algorithm (reverse-engineered from cli.js) ──
 const CCH_SALT = '59cf53e54c78'
@@ -188,6 +191,85 @@ function rewritePromptText(text: string, config: Config, hash: string | null): s
   )
 
   return result
+}
+
+/**
+ * Scan the ORIGINAL (pre-rewrite) request body for the real cwd / home paths
+ * that rewritePromptText is about to mask, and return the inverse mappings
+ * (canonical → real). The proxy applies these to the model's streamed response
+ * so bash/file tool calls reference real paths even though the prompt was
+ * masked. Returns [] when masking can't be reversed (no working_dir, no real
+ * path found, or already identical) — the caller then streams through untouched.
+ */
+export function extractReversePathMap(body: Buffer, config: Config): PathPair[] {
+  const pe = config.prompt_env
+  if (!pe?.working_dir || pe.reverse_paths === false) return []
+
+  const text = body.toString('utf-8')
+  const canonicalHome = pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'
+  const pairs: PathPair[] = []
+
+  // Real working directory (what Step 3 collapses into working_dir).
+  const cwd = text.match(/(?:Primary )?[Ww]orking directory:\s*(\/[^\s"\\]+)/)?.[1]
+  if (cwd && cwd !== pe.working_dir) pairs.push({ from: pe.working_dir, to: cwd })
+
+  // Real home prefix (what Step 4 collapses into canonicalHome).
+  const home = text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]
+  if (home && home !== canonicalHome) pairs.push({ from: canonicalHome, to: home })
+
+  // Apply the most specific (longest) prefix first so working_dir wins over the
+  // bare home prefix it contains (e.g. /Users/jack/projects before /Users/jack/).
+  pairs.sort((a, b) => b.from.length - a.from.length)
+  return pairs
+}
+
+/**
+ * Streaming literal replacer that is safe across chunk boundaries. Holds back up
+ * to (longest 'from' length − 1) chars between pushes so a search target split
+ * between two network chunks still matches. StringDecoder guarantees multi-byte
+ * UTF-8 characters are never cut mid-sequence. Call push() per chunk, flush() at
+ * end.
+ */
+export function createPathReplacer(pairs: PathPair[]) {
+  const decoder = new StringDecoder('utf8')
+  const froms = pairs.map((p) => p.from)
+  const maxFrom = Math.max(...froms.map((f) => f.length), 1)
+  let pending = '' // unreplaced carry-over: a partial prefix of some 'from'
+
+  const apply = (s: string): string => {
+    for (const p of pairs) s = s.split(p.from).join(p.to)
+    return s
+  }
+
+  // Length of the longest suffix of s that is a STRICT prefix of some 'from'.
+  // Those trailing chars might still grow into a match — or into a longer match
+  // that supersedes a shorter one sharing the prefix (e.g. /Users/jack/ vs
+  // /Users/jack/projects) — so they're held back until the next chunk arrives.
+  const heldBack = (s: string): number => {
+    const max = Math.min(s.length, maxFrom - 1)
+    for (let k = max; k >= 1; k--) {
+      const suf = s.slice(s.length - k)
+      for (const f of froms) {
+        if (f.length > k && f.startsWith(suf)) return k
+      }
+    }
+    return 0
+  }
+
+  return {
+    push(buf: Buffer): string {
+      pending += decoder.write(buf)
+      const cut = pending.length - heldBack(pending)
+      const head = pending.slice(0, cut)
+      pending = pending.slice(cut)
+      return apply(head)
+    },
+    flush(): string {
+      const out = apply(pending + decoder.end())
+      pending = ''
+      return out
+    },
+  }
 }
 
 /**

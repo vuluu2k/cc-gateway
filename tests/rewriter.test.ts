@@ -1,4 +1,4 @@
-import { rewriteBody, rewriteHeaders } from '../src/rewriter.js'
+import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer } from '../src/rewriter.js'
 import type { Config } from '../src/config.js'
 import { strict as assert } from 'assert'
 
@@ -310,6 +310,64 @@ test('passes non-JSON body through unchanged', () => {
   const raw = Buffer.from('not json content')
   const result = rewriteBody(raw, '/v1/messages', config)
   assert.equal(result.toString(), 'not json content')
+})
+
+// ============================================================
+console.log('\nReverse path mapping (response un-masking)')
+// ============================================================
+
+test('extractReversePathMap maps canonical → real cwd and home', () => {
+  const body = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /Users/mac/Documents/builderx_api',
+    messages: [{
+      role: 'user',
+      content: '<system-reminder>see /Users/mac/notes.md</system-reminder>',
+    }],
+  }))
+  const pairs = extractReversePathMap(body, config)
+  // working_dir pair must come first (more specific than the bare home prefix)
+  assert.equal(pairs[0].from, '/Users/jack/projects')
+  assert.equal(pairs[0].to, '/Users/mac/Documents/builderx_api')
+  assert.ok(pairs.some(p => p.from === '/Users/jack/' && p.to === '/Users/mac/'))
+})
+
+test('extractReversePathMap returns [] when nothing to reverse', () => {
+  const body = Buffer.from(JSON.stringify({ system: 'no paths here', messages: [] }))
+  assert.equal(extractReversePathMap(body, config).length, 0)
+})
+
+test('extractReversePathMap returns [] when reverse_paths is off', () => {
+  const off = { ...config, prompt_env: { ...config.prompt_env, reverse_paths: false } }
+  const body = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /Users/mac/Documents/builderx_api',
+    messages: [],
+  }))
+  assert.equal(extractReversePathMap(body, off).length, 0)
+})
+
+test('createPathReplacer reverses masked paths in one chunk', () => {
+  const pairs = [
+    { from: '/Users/jack/projects', to: '/Users/mac/Documents/builderx_api' },
+    { from: '/Users/jack/', to: '/Users/mac/' },
+  ]
+  const r = createPathReplacer(pairs)
+  let out = r.push(Buffer.from('cd /Users/jack/projects/lib && cat /Users/jack/.zshrc'))
+  out += r.flush()
+  assert.equal(out, 'cd /Users/mac/Documents/builderx_api/lib && cat /Users/mac/.zshrc')
+})
+
+test('createPathReplacer reverses a path split across chunk boundaries', () => {
+  const pairs = [
+    { from: '/Users/jack/projects', to: '/Users/mac/Documents/builderx_api' },
+    { from: '/Users/jack/', to: '/Users/mac/' },
+  ]
+  const r = createPathReplacer(pairs)
+  const full = 'open /Users/jack/projects/main.ex now'
+  // Feed one byte at a time — the worst case for boundary splitting.
+  let out = ''
+  for (const ch of Buffer.from(full)) out += r.push(Buffer.from([ch]))
+  out += r.flush()
+  assert.equal(out, 'open /Users/mac/Documents/builderx_api/main.ex now')
 })
 
 // ============================================================

@@ -43,6 +43,10 @@ export type Config = {
     shell: string           // "zsh"
     os_version: string      // "Darwin 24.4.0" — uname -sr output
     working_dir: string     // "/Users/dev/projects" — canonical home path prefix
+    // Reverse the masked cwd/home paths back to the real ones in the model's
+    // response stream, so bash/file tool calls work despite request masking.
+    // Defaults to on; set false to disable (response passes through untouched).
+    reverse_paths?: boolean
   }
   process: {
     constrained_memory: number

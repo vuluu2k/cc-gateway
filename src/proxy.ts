@@ -7,7 +7,7 @@ import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, initAuth, setAuthTokens } from './auth.js'
 import { getAccessToken } from './oauth.js'
-import { rewriteBody, rewriteHeaders } from './rewriter.js'
+import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
 import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
@@ -261,6 +261,14 @@ async function handleRequest(
     userMessage = extractLastUserMessage(body)
   }
 
+  // Capture the real cwd / home paths BEFORE masking so the model's response
+  // can be reversed back to them. Keeps path masking on (privacy) while bash /
+  // file tool calls still hit real paths instead of the canonical /Users/jack.
+  const reversePairs =
+    body.length > 0 && pathname.startsWith('/v1/messages')
+      ? extractReversePathMap(body, config)
+      : []
+
   // Rewrite identity fields in body
   if (body.length > 0) {
     try {
@@ -326,17 +334,27 @@ async function handleRequest(
         )
       }
 
+      // Three response modes for /v1/messages:
+      //  - wantRewrite: decode → reverse masked paths → stream identity bytes
+      //    (needed so the model's tool calls hit real paths). Also parses usage.
+      //  - parser only: forward raw bytes byte-identical, decode a copy for usage.
+      //  - neither: cheap passthrough.
+      const isMessages = pathname.startsWith('/v1/messages')
+      const wantUsage = isMessages && status >= 200 && status < 300
+      const wantRewrite = isMessages && reversePairs.length > 0
+
       const responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
+      if (wantRewrite) {
+        // We re-emit decoded, path-rewritten bytes of a different length, so the
+        // upstream content-encoding / content-length no longer describe the body.
+        delete responseHeaders['content-encoding']
+        delete responseHeaders['content-length']
+      }
 
       res.writeHead(status, responseHeaders)
 
-      // Tee the response: write to client (live streaming preserved) AND feed
-      // a parser that pulls token usage out of the SSE / JSON body. Only do
-      // this for /v1/messages where Anthropic emits usage; everything else
-      // just passes through directly to keep the hot path cheap.
-      const isMessages = pathname.startsWith('/v1/messages')
-      const parser = isMessages && status >= 200 && status < 300 ? new SSEUsageParser() : null
+      const parser = wantUsage ? new SSEUsageParser() : null
 
       let finalized = false
       const finalize = () => {
@@ -366,20 +384,60 @@ async function handleRequest(
         }
       }
 
-      if (parser) {
+      const encoding = String(proxyRes.headers['content-encoding'] || '')
+        .toLowerCase()
+        .trim()
+      const makeDecoder = (): zlib.Gunzip | zlib.BrotliDecompress | zlib.Inflate | null =>
+        encoding === 'gzip' ? zlib.createGunzip()
+        : encoding === 'br' ? zlib.createBrotliDecompress()
+        : encoding === 'deflate' ? zlib.createInflate()
+        : null
+
+      if (wantRewrite) {
+        const decoder = makeDecoder()
+        const replacer = createPathReplacer(reversePairs)
+        let ended = false
+        const onDecoded = (buf: Buffer) => {
+          if (parser) parser.feed(buf)
+          const out = replacer.push(buf)
+          if (out) res.write(out)
+        }
+        const done = () => {
+          if (ended) return
+          ended = true
+          const tail = replacer.flush()
+          if (tail) res.write(tail)
+          parser?.end()
+          res.end()
+          finalize()
+        }
+        if (decoder) {
+          decoder.on('data', onDecoded)
+          decoder.on('end', done)
+          decoder.on('error', (err: Error) => {
+            log('warn', `Reverse-path decoder failed (${encoding}): ${err.message}`)
+            done()
+          })
+        }
+        proxyRes.on('data', (chunk: Buffer) => {
+          if (decoder) decoder.write(chunk)
+          else onDecoded(chunk)
+        })
+        proxyRes.on('end', () => {
+          if (decoder) decoder.end()
+          else done()
+        })
+        proxyRes.on('error', (err) => {
+          log('error', `Upstream stream error: ${err.message}`)
+          done()
+        })
+      } else if (parser) {
         // Forward raw upstream bytes to the client untouched so the response
         // is byte-identical to a direct Anthropic call (preserves whatever
         // Content-Encoding upstream chose). For the parser, decompress a
         // local copy in-process so token counts stay readable regardless of
         // gzip/br/deflate.
-        const encoding = String(proxyRes.headers['content-encoding'] || '')
-          .toLowerCase()
-          .trim()
-        let decoder: zlib.Gunzip | zlib.BrotliDecompress | zlib.Inflate | null = null
-        if (encoding === 'gzip') decoder = zlib.createGunzip()
-        else if (encoding === 'br') decoder = zlib.createBrotliDecompress()
-        else if (encoding === 'deflate') decoder = zlib.createInflate()
-
+        const decoder = makeDecoder()
         if (decoder) {
           decoder.on('data', (decoded: Buffer) => parser.feed(decoded))
           decoder.on('error', (err: Error) => {
