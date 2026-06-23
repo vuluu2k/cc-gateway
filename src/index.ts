@@ -13,6 +13,7 @@ import {
   syncOAuthFromCredentialsIfChanged,
   updateConfigOAuth,
 } from './bootstrap-config.js'
+import { syncClaudeCodeVersion, startDailyVersionAutoUpdate } from './cc-version.js'
 
 // Resolve the config path: explicit arg > CCG_CONFIG_PATH env > /app/data/config.yaml.
 // /app/data is the persistent volume so the auto-generated config survives restarts.
@@ -37,6 +38,14 @@ try {
   log('info', 'CC Gateway starting...')
   log('info', `Config: ${resolve(configPath)}`)
 
+  // On every deploy/start, sync the spoofed Claude Code version to the latest
+  // released CLI so the forwarded user-agent + cc_version stay current. Opt out
+  // with CCG_DISABLE_VERSION_AUTOUPDATE=1. Best-effort — never blocks startup.
+  if (process.env.CCG_DISABLE_VERSION_AUTOUPDATE !== '1') {
+    await syncClaudeCodeVersion(configPath, config)
+    startDailyVersionAutoUpdate(configPath, config)
+  }
+
   // Whenever OAuth refreshes (immediately or on the schedule), persist the
   // rotated refresh_token back to config.yaml so container restarts pick up
   // the latest valid token instead of replaying a consumed one.
@@ -57,12 +66,22 @@ try {
 
   startProxy(config)
 
-  // Hot-reload auth.tokens on config changes (poll-based — works with bind mounts)
+  // Hot-reload auth.tokens + env.version on config changes (poll-based — works
+  // with bind mounts). The env.version sync lets an external cron / manual edit
+  // to config.yaml take effect live without restarting the gateway.
   const watchPath = resolve(configPath)
   let lastTokenSig = JSON.stringify(config.auth.tokens)
   watchFile(watchPath, { interval: 2000 }, () => {
     try {
       const next = loadConfig(configPath)
+
+      const nextVersion = String(next.env.version || '')
+      if (nextVersion && nextVersion !== String(config.env.version || '')) {
+        config.env.version = nextVersion
+        config.env.version_base = String(next.env.version_base || nextVersion)
+        log('info', `Reloaded Claude Code version: ${nextVersion}`)
+      }
+
       const sig = JSON.stringify(next.auth.tokens)
       if (sig === lastTokenSig) return
       initAuth(next)

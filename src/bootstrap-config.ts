@@ -194,6 +194,33 @@ export function updateConfigOAuth(
 }
 
 /**
+ * Persist the spoofed Claude Code version into config.yaml's `env:` section
+ * (both `version` and `version_base`). Round-trips through parseDocument so
+ * user edits / comments survive. No-op if the file is missing.
+ */
+export function updateConfigEnvVersion(configPath: string, version: string): void {
+  const absPath = resolve(configPath)
+  if (!existsSync(absPath)) {
+    log('warn', `updateConfigEnvVersion: ${absPath} does not exist, skipping persist`)
+    return
+  }
+  try {
+    const raw = readFileSync(absPath, 'utf-8')
+    const doc = parseDocument(raw)
+    let env = doc.getIn(['env'], true) as YAMLMap | undefined
+    if (!env) {
+      env = new YAMLMap()
+      doc.set('env', env)
+    }
+    env.set('version', version)
+    env.set('version_base', version)
+    writeFileSync(absPath, doc.toString(), 'utf-8')
+  } catch (err) {
+    log('error', `updateConfigEnvVersion failed: ${err instanceof Error ? err.message : err}`)
+  }
+}
+
+/**
  * If a mounted credentials.json has a refresh token that differs from the one
  * already in config.yaml, copy it across before the gateway boots. This handles
  * the case where the host re-logged in to Claude and rotated the refresh token.
