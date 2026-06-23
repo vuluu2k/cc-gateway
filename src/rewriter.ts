@@ -178,13 +178,18 @@ function rewritePromptText(text: string, config: Config, hash: string | null): s
     `OS Version: ${pe.os_version}`,
   )
 
-  // 3. Working directory / Primary working directory
+  // 3. Working directory line. A home-based cwd (/Users/x/… or /home/x/…) is
+  //    LEFT for Step 4 to mask structurally — swap only the home prefix, keep
+  //    the project subpath — which is reversible for any number of distinct
+  //    cwds/projects in one request. Only a non-home cwd (no username to hide)
+  //    is collapsed to the canonical working_dir.
   result = result.replace(
-    /((?:Primary )?[Ww]orking directory:\s*)\/\S+/g,
-    `$1${pe.working_dir}`,
+    /((?:Primary )?[Ww]orking directory:\s*)(\/\S+)/g,
+    (m, label, p) => (/^\/(?:Users|home)\/[^/]+\//.test(p) ? m : `${label}${pe.working_dir}`),
   )
 
-  // 4. Home directory paths: /Users/xxx/, /home/xxx/
+  // 4. Home directory paths: /Users/xxx/, /home/xxx/ → swap username only,
+  //    preserving the rest of the path (also masks the home-based cwd above).
   result = result.replace(
     /\/(?:Users|home)\/[^/\s]+\//g,
     `${pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'}`,
@@ -209,9 +214,13 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
   const canonicalHome = pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'
   const pairs: PathPair[] = []
 
-  // Real working directory (what Step 3 collapses into working_dir).
-  const cwd = text.match(/(?:Primary )?[Ww]orking directory:\s*(\/[^\s"\\]+)/)?.[1]
-  if (cwd && cwd !== pe.working_dir) pairs.push({ from: pe.working_dir, to: cwd })
+  // Non-home cwds are the only ones Step 3 collapses into working_dir; map that
+  // back to the first such cwd. Home-based cwds keep their structure (Step 4
+  // swaps just the username) and are reversed by the home-prefix pair below —
+  // which covers ANY number of distinct projects/cwds under that home.
+  const cwds = [...text.matchAll(/(?:Primary )?[Ww]orking directory:\s*(\/[^\s"\\]+)/g)].map((m) => m[1])
+  const nonHomeCwd = cwds.find((c) => !/^\/(?:Users|home)\/[^/]+\//.test(c))
+  if (nonHomeCwd && nonHomeCwd !== pe.working_dir) pairs.push({ from: pe.working_dir, to: nonHomeCwd })
 
   // Real home prefix (what Step 4 collapses into canonicalHome).
   const home = text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]

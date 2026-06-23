@@ -101,7 +101,7 @@ test('rewrites Platform in system prompt', () => {
   assert.ok(result.system[0].text.includes('OS Version: Darwin 24.4.0'))
 })
 
-test('rewrites working directory path', () => {
+test('masks home-based working directory structurally (username only)', () => {
   const body = {
     system: 'Primary working directory: /home/bob/myproject',
     messages: [],
@@ -109,8 +109,21 @@ test('rewrites working directory path', () => {
   const result = JSON.parse(
     rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config).toString(),
   )
+  // Home prefix swapped, project subpath preserved (so it can be reversed).
+  assert.ok(result.system.includes('/Users/jack/myproject'), `Got: ${result.system}`)
+  assert.ok(!result.system.includes('/home/bob/'), 'Original username should be replaced')
+})
+
+test('collapses non-home working directory to canonical working_dir', () => {
+  const body = {
+    system: 'Primary working directory: /workspace/app',
+    messages: [],
+  }
+  const result = JSON.parse(
+    rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config).toString(),
+  )
   assert.ok(result.system.includes('/Users/jack/projects'), `Got: ${result.system}`)
-  assert.ok(!result.system.includes('/home/bob/'), 'Original path should be replaced')
+  assert.ok(!result.system.includes('/workspace/app'), 'Non-home cwd should be collapsed')
 })
 
 test('strips billing header from system prompt (string format)', () => {
@@ -316,7 +329,7 @@ test('passes non-JSON body through unchanged', () => {
 console.log('\nReverse path mapping (response un-masking)')
 // ============================================================
 
-test('extractReversePathMap maps canonical → real cwd and home', () => {
+test('extractReversePathMap maps home prefix (home-based cwd needs no extra pair)', () => {
   const body = Buffer.from(JSON.stringify({
     system: 'Primary working directory: /Users/mac/Documents/builderx_api',
     messages: [{
@@ -325,10 +338,35 @@ test('extractReversePathMap maps canonical → real cwd and home', () => {
     }],
   }))
   const pairs = extractReversePathMap(body, config)
-  // working_dir pair must come first (more specific than the bare home prefix)
-  assert.equal(pairs[0].from, '/Users/jack/projects')
-  assert.equal(pairs[0].to, '/Users/mac/Documents/builderx_api')
+  // Home-based cwd is structure-preserved, so the single home-prefix pair
+  // reverses it (and everything else under that home). No working_dir pair.
   assert.ok(pairs.some(p => p.from === '/Users/jack/' && p.to === '/Users/mac/'))
+  assert.ok(!pairs.some(p => p.from === '/Users/jack/projects'), 'no working_dir pair for home cwd')
+})
+
+test('extractReversePathMap maps working_dir for a non-home cwd', () => {
+  const body = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /workspace/app',
+    messages: [],
+  }))
+  const pairs = extractReversePathMap(body, config)
+  assert.ok(pairs.some(p => p.from === '/Users/jack/projects' && p.to === '/workspace/app'))
+})
+
+test('reverse handles multiple projects under one home (multi-cwd)', () => {
+  const body = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /Users/mac/projA',
+    messages: [{
+      role: 'user',
+      content: '<system-reminder>also /Users/mac/projB/lib/x.ex</system-reminder>',
+    }],
+  }))
+  const pairs = extractReversePathMap(body, config)
+  const r = createPathReplacer(pairs)
+  // Model response referencing BOTH masked projects must reverse to both reals.
+  let out = r.push(Buffer.from('cat /Users/jack/projB/lib/x.ex; cd /Users/jack/projA/sub'))
+  out += r.flush()
+  assert.equal(out, 'cat /Users/mac/projB/lib/x.ex; cd /Users/mac/projA/sub')
 })
 
 test('extractReversePathMap returns [] when nothing to reverse', () => {
