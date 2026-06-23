@@ -103,7 +103,10 @@ prompt_env:
   platform: darwin
   shell: zsh
   os_version: "${OS_VER}"
-  working_dir: /Users/jack/projects
+  working_dir: /Users/dev/projects
+  # OFF by default: path masking is request-only and breaks agent bash/file
+  # tool calls (model emits the fake path instead of the real cwd).
+  mask_paths: false
 
 process:
   constrained_memory: 34359738368

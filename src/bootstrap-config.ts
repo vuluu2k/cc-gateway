@@ -105,6 +105,9 @@ prompt_env:
   shell: zsh
   os_version: "Darwin 24.4.0"
   working_dir: /Users/dev/projects
+  # OFF by default: path masking is request-only and breaks agent bash/file
+  # tool calls (model emits the fake path). See config.example.yaml for details.
+  mask_paths: false
 
 process:
   constrained_memory: 34359738368

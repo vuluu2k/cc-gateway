@@ -63,7 +63,12 @@ prompt_env:
   platform: darwin                    # Must match env.platform
   shell: zsh                          # Shell name shown in prompt
   os_version: "Darwin 24.4.0"        # uname -sr output
-  working_dir: /Users/dev/projects    # Canonical home directory path prefix
+  working_dir: /Users/dev/projects    # Canonical home directory path prefix (only used when mask_paths: true)
+  # Rewrite real cwd / home paths to working_dir in the prompt. Keep OFF for
+  # agentic use: the rewrite is request-only, so the model echoes the fake path
+  # into bash/file tool calls and they fail on the real machine. Hiding paths
+  # also adds ~no privacy since the API already sees full file contents.
+  mask_paths: false
 
 # Canonical process metrics (should look like a real machine)
 process:

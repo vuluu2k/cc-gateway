@@ -33,6 +33,7 @@ const config: Config = {
     shell: 'zsh',
     os_version: 'Darwin 24.4.0',
     working_dir: '/Users/jack/projects',
+    mask_paths: true,
   },
   process: {
     constrained_memory: 34359738368,
@@ -153,6 +154,25 @@ test('rewrites home paths in user messages with system-reminder', () => {
     rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config).toString(),
   )
   assert.ok(!result.messages[0].content.includes('/home/alice/'))
+})
+
+test('does NOT rewrite paths when mask_paths is off (default)', () => {
+  const configNoMask = {
+    ...config,
+    prompt_env: { ...config.prompt_env, mask_paths: false },
+  }
+  const body = {
+    system: 'Primary working directory: /Users/mac/Documents/builderx_api',
+    messages: [],
+  }
+  const result = JSON.parse(
+    rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', configNoMask).toString(),
+  )
+  assert.ok(
+    result.system.includes('/Users/mac/Documents/builderx_api'),
+    `Real path should be preserved. Got: ${result.system}`,
+  )
+  assert.ok(!result.system.includes('/Users/jack/'), 'Should not inject canonical path')
 })
 
 // ============================================================

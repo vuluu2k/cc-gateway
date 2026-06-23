@@ -43,6 +43,11 @@ export type Config = {
     shell: string           // "zsh"
     os_version: string      // "Darwin 24.4.0" — uname -sr output
     working_dir: string     // "/Users/dev/projects" — canonical home path prefix
+    // Rewrite real cwd / home paths in the prompt to working_dir. OFF by default:
+    // masking is one-directional (request only), so the model echoes the fake
+    // path back into bash/file tool calls and they fail on the real machine.
+    // Only enable if you accept broken agent commands in exchange for hiding paths.
+    mask_paths?: boolean
   }
   process: {
     constrained_memory: number
