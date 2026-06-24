@@ -222,8 +222,23 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
   const nonHomeCwd = cwds.find((c) => !/^\/(?:Users|home)\/[^/]+\//.test(c))
   if (nonHomeCwd && nonHomeCwd !== pe.working_dir) pairs.push({ from: pe.working_dir, to: nonHomeCwd })
 
-  // Real home prefix (what Step 4 collapses into canonicalHome).
-  const home = text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]
+  // Real home prefix (what Step 4 collapses into canonicalHome). Derive it from
+  // the authoritative env "Working directory:" line(s) — NOT a generic first-
+  // /Users/ scan of the whole body. In a multi-turn session the conversation
+  // history (which serializes BEFORE the system env block) can already contain
+  // the canonical /Users/jack/ from an earlier masked turn; a first-match scan
+  // locks onto that, concludes home === canonicalHome, and silently drops the
+  // reverse pair for the rest of the session — turning un-masking off. The cwd
+  // lines come from the client's freshly-injected env, so they always hold the
+  // real home pre-mask. Prefer one whose prefix differs from the canonical home;
+  // fall back to a first-match scan only when no env line is present at all.
+  const homePrefixes = cwds
+    .map((c) => c.match(/^\/(?:Users|home)\/[^/]+\//)?.[0])
+    .filter((h): h is string => !!h)
+  const home =
+    homePrefixes.find((h) => h !== canonicalHome) ??
+    homePrefixes[0] ??
+    text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]
   if (home && home !== canonicalHome) pairs.push({ from: canonicalHome, to: home })
 
   // Apply the most specific (longest) prefix first so working_dir wins over the

@@ -369,6 +369,30 @@ test('reverse handles multiple projects under one home (multi-cwd)', () => {
   assert.equal(out, 'cat /Users/mac/projB/lib/x.ex; cd /Users/mac/projA/sub')
 })
 
+test('reverse survives history already containing the canonical /Users/jack/ path', () => {
+  // Real multi-turn shape: `messages` (history) serialize BEFORE `system`, and an
+  // earlier masked turn left /Users/jack/ in the history. A first-match scan would
+  // grab that canonical path, decide there is nothing to reverse, and break un-
+  // masking for the rest of the session. The env "Working directory:" line is the
+  // real anchor and must win.
+  const body = Buffer.from(JSON.stringify({
+    messages: [{
+      role: 'assistant',
+      content: 'Earlier I ran `ls /Users/jack/Documents/webcake/builderx_api/`',
+    }],
+    system: 'Primary working directory: /Users/mac/Documents/webcake/builderx_api',
+  }))
+  const pairs = extractReversePathMap(body, config)
+  assert.ok(
+    pairs.some(p => p.from === '/Users/jack/' && p.to === '/Users/mac/'),
+    `Expected jack→mac reverse pair, got: ${JSON.stringify(pairs)}`,
+  )
+  const r = createPathReplacer(pairs)
+  let out = r.push(Buffer.from('ls /Users/jack/Documents/webcake/builderx_api/'))
+  out += r.flush()
+  assert.equal(out, 'ls /Users/mac/Documents/webcake/builderx_api/')
+})
+
 test('extractReversePathMap returns [] when nothing to reverse', () => {
   const body = Buffer.from(JSON.stringify({ system: 'no paths here', messages: [] }))
   assert.equal(extractReversePathMap(body, config).length, 0)
