@@ -327,10 +327,20 @@ async function handleRequest(
       // shared-account throttling visible instead of looking like a cost block.
       if (status === 429 || status === 529) {
         const retryAfter = proxyRes.headers['retry-after']
+        // Anthropic tells us exactly which bucket is exhausted via its
+        // anthropic-ratelimit-* headers (requests / input-tokens / output-tokens
+        // / tokens), and for OAuth/Claude-subscription accounts via the
+        // anthropic-ratelimit-unified-* family (5h + weekly usage windows).
+        // Surfacing them turns "mystery 429" into a named limit so we can tell a
+        // big-single-request ITPM hit apart from a shared-account usage cap.
+        const rateLimitHeaders = Object.entries(proxyRes.headers)
+          .filter(([k]) => k.toLowerCase().startsWith('anthropic-ratelimit'))
+          .map(([k, v]) => `${k}=${v}`)
         log(
           'warn',
           `Upstream throttled "${clientName}": ${status} ${method} ${path}` +
-            (retryAfter ? ` (retry-after: ${retryAfter}s)` : ''),
+            (retryAfter ? ` (retry-after: ${retryAfter}s)` : '') +
+            (rateLimitHeaders.length ? ` [${rateLimitHeaders.join(' ')}]` : ''),
         )
       }
 
@@ -399,7 +409,45 @@ async function handleRequest(
         : encoding === 'deflate' ? zlib.createDeflate()
         : null
 
-      if (wantRewrite) {
+      if (status >= 400) {
+        // Error responses (4xx/5xx) are small JSON, not SSE — buffer a copy
+        // while forwarding the raw bytes byte-identical to the client, then
+        // decode and log Anthropic's actual error payload (type + message). This
+        // turns an opaque "429/400/500" into the real reason upstream gave us
+        // (rate_limit_error vs invalid_request_error vs overloaded_error, etc.).
+        const ERR_LOG_CAP = 4096
+        const errChunks: Buffer[] = []
+        let errBytes = 0
+        proxyRes.on('data', (chunk: Buffer) => {
+          res.write(chunk)
+          if (errBytes < ERR_LOG_CAP) {
+            errChunks.push(chunk)
+            errBytes += chunk.length
+          }
+        })
+        proxyRes.on('end', () => {
+          res.end()
+          const raw = Buffer.concat(errChunks)
+          let text = ''
+          try {
+            text =
+              encoding === 'gzip' ? zlib.gunzipSync(raw).toString('utf8')
+              : encoding === 'br' ? zlib.brotliDecompressSync(raw).toString('utf8')
+              : encoding === 'deflate' ? zlib.inflateSync(raw).toString('utf8')
+              : raw.toString('utf8')
+          } catch {
+            text = raw.toString('utf8')
+          }
+          const body = text.replace(/\s+/g, ' ').trim().slice(0, ERR_LOG_CAP)
+          log('warn', `Upstream ${status} for "${clientName}" ${method} ${path}: ${body}`)
+          finalize()
+        })
+        proxyRes.on('error', (err) => {
+          log('error', `Upstream stream error: ${err.message}`)
+          res.end()
+          finalize()
+        })
+      } else if (wantRewrite) {
         // upstream → [decoder] → reverse paths → [encoder] → client.
         // The encoder re-compresses with the SAME content-encoding so the wire
         // stays gzip/br/deflate; when upstream sent identity, both are null and
