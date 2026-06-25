@@ -433,5 +433,159 @@ test('createPathReplacer reverses a path split across chunk boundaries', () => {
 })
 
 // ============================================================
+console.log('\nNewly covered edge cases (#1 multi non-home, #2 bare home, #4 windows)')
+// ============================================================
+
+// Full round-trip helper: mask a request, then reverse the model's response.
+function roundTrip(systemText: string, modelResponse: string): { masked: string; reversed: string } {
+  const buf = Buffer.from(JSON.stringify({ system: systemText, messages: [] }))
+  const masked = JSON.parse(rewriteBody(buf, '/v1/messages', config).toString()).system
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let reversed = r.push(Buffer.from(modelResponse))
+  reversed += r.flush()
+  return { masked, reversed }
+}
+
+test('#1 multiple distinct non-home cwds get distinct canonical roots', () => {
+  // Two separate "Working directory:" lines (multi-root session). Non-home roots
+  // are only discovered via cwd lines — there is no username heuristic for them.
+  const buf = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /workspace/app\nWorking directory: /srv/api',
+    messages: [{ role: 'user', content: '<system-reminder>also building /srv/api/main.go</system-reminder>' }],
+  }))
+  const masked = JSON.parse(rewriteBody(buf, '/v1/messages', config).toString())
+  // Both roots masked, but to DIFFERENT canonical targets (no lossy collapse).
+  assert.ok(masked.system.includes('/Users/jack/projects'), `system: ${masked.system}`)
+  const reminder = masked.messages[0].content
+  assert.ok(reminder.includes('/Users/jack/projects-cwd1/main.go'), `reminder: ${reminder}`)
+  assert.ok(!reminder.includes('/srv/api'), 'second non-home root must be masked')
+})
+
+test('#1 both non-home roots reverse back to their own real paths', () => {
+  const buf = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /workspace/app\nWorking directory: /srv/api',
+    messages: [],
+  }))
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let out = r.push(Buffer.from('edit /Users/jack/projects-cwd1/main.go and /Users/jack/projects/app.ts'))
+  out += r.flush()
+  assert.equal(out, 'edit /srv/api/main.go and /workspace/app/app.ts')
+})
+
+test('#1 additional working directories (real bullet-list env format) are masked + reversed', () => {
+  // The real Claude Code env block: primary `Working directory:` line plus extra
+  // roots under an `Additional working directories:` header as a `- /path` list.
+  const system = [
+    'Here is useful information about the environment:',
+    '<env>',
+    'Working directory: /workspace/app',
+    'Is directory a git repo: Yes',
+    'Additional working directories:',
+    '- /srv/api',
+    '- /opt/data',
+    'Platform: linux',
+    '</env>',
+  ].join('\n')
+  const buf = Buffer.from(JSON.stringify({
+    system,
+    messages: [{ role: 'user', content: '<system-reminder>edit /srv/api/x.go and /opt/data/y.csv</system-reminder>' }],
+  }))
+  const masked = JSON.parse(rewriteBody(buf, '/v1/messages', config).toString())
+  const reminder = masked.messages[0].content
+  // Neither bullet-listed root may leak upstream.
+  assert.ok(!reminder.includes('/srv/api/'), `srv/api leaked: ${reminder}`)
+  assert.ok(!reminder.includes('/opt/data/'), `opt/data leaked: ${reminder}`)
+  assert.ok(!masked.system.includes('/srv/api'), `env block leaked srv/api: ${masked.system}`)
+  // And the model's response un-masks each back to its OWN real root.
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let out = r.push(Buffer.from(reminder.replace(/<\/?system-reminder>/g, '')))
+  out += r.flush()
+  assert.ok(out.includes('/srv/api/x.go'), `srv reverse: ${out}`)
+  assert.ok(out.includes('/opt/data/y.csv'), `opt reverse: ${out}`)
+})
+
+test('#2 bare home (no trailing slash) is masked, not leaked', () => {
+  const { masked } = roundTrip('Primary working directory: /Users/mac/proj\nHOME is /Users/mac right now', '')
+  assert.ok(!masked.includes('/Users/mac'), `real username leaked: ${masked}`)
+  assert.ok(/HOME is \/Users\/jack right now/.test(masked), `masked: ${masked}`)
+})
+
+test('#2 bare home reverses, but does NOT corrupt a longer sibling username', () => {
+  const buf = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /Users/mac/proj',
+    messages: [],
+  }))
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  // `cd /Users/jack` (bare, boundary) → /Users/mac; but /Users/jackson untouched.
+  let out = r.push(Buffer.from('cd /Users/jack && stat /Users/jackson/x'))
+  out += r.flush()
+  assert.equal(out, 'cd /Users/mac && stat /Users/jackson/x')
+})
+
+test('#2 bare home reverses when split one byte at a time', () => {
+  const buf = Buffer.from(JSON.stringify({ system: 'Primary working directory: /Users/mac/proj', messages: [] }))
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let out = ''
+  for (const ch of Buffer.from('echo /Users/jack done')) out += r.push(Buffer.from([ch]))
+  out += r.flush()
+  assert.equal(out, 'echo /Users/mac done')
+})
+
+test('#2 bare home at end-of-stream still reverses', () => {
+  const buf = Buffer.from(JSON.stringify({ system: 'Primary working directory: /Users/mac/proj', messages: [] }))
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let out = r.push(Buffer.from('cwd is /Users/jack'))
+  out += r.flush()
+  assert.equal(out, 'cwd is /Users/mac')
+})
+
+test('home mask preserves trailing delimiters (PATH-style and shell)', () => {
+  const { masked } = roundTrip(
+    'env PATH=/Users/mac:/usr/bin then cd /Users/mac; ls and (/Users/mac), done',
+    '',
+  )
+  assert.ok(masked.includes('PATH=/Users/jack:/usr/bin'), `colon dropped: ${masked}`)
+  assert.ok(masked.includes('cd /Users/jack; ls'), `semicolon dropped: ${masked}`)
+  assert.ok(masked.includes('(/Users/jack),'), `paren/comma dropped: ${masked}`)
+  assert.ok(!masked.includes('/Users/mac'), `real username leaked: ${masked}`)
+})
+
+test('#2 trailing-punctuation cwd line does not leak its subpaths', () => {
+  const buf = Buffer.from(JSON.stringify({
+    system: 'Working directory: /srv/api.',
+    messages: [{ role: 'user', content: '<system-reminder>open /srv/api/secret.txt</system-reminder>' }],
+  }))
+  const masked = JSON.parse(rewriteBody(buf, '/v1/messages', config).toString())
+  const reminder = masked.messages[0].content
+  assert.ok(reminder.includes('/Users/jack/projects/secret.txt'), `subpath not masked: ${reminder}`)
+  assert.ok(!reminder.includes('/srv/api/'), `real subpath leaked: ${reminder}`)
+})
+
+test('mixed home + non-home cwd: each reverses to its OWN real path (no canon collision)', () => {
+  // Real home /Users/mac with a `projects` dir, AND a non-home cwd. The non-home
+  // root must not alias /Users/mac/projects when masked.
+  const buf = Buffer.from(JSON.stringify({
+    system: 'Primary working directory: /Users/mac/projA\nWorking directory: /workspace/app',
+    messages: [],
+  }))
+  const masked = JSON.parse(rewriteBody(buf, '/v1/messages', config).toString())
+  assert.ok(!masked.system.includes('/Users/mac'), 'home username must be masked')
+  assert.ok(!masked.system.includes('/workspace/app'), 'non-home root must be masked')
+  const r = createPathReplacer(extractReversePathMap(buf, config))
+  let out = r.push(Buffer.from('edit /Users/jack/projects/x and /Users/jack/projects-cwd0/y'))
+  out += r.flush()
+  // /Users/jack/projects/x is a real HOME subpath → back to /Users/mac; the
+  // non-home canon (-cwd0) is the only thing that maps to /workspace/app.
+  assert.equal(out, 'edit /Users/mac/projects/x and /workspace/app/y')
+})
+
+test('#4 windows home masks username only, preserving drive + backslashes', () => {
+  const body = { system: 'Primary working directory: C:\\Users\\bob\\code\\app', messages: [] }
+  const masked = JSON.parse(rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config).toString())
+  assert.ok(masked.system.includes('C:\\Users\\jack\\code\\app'), `masked: ${masked.system}`)
+  assert.ok(!masked.system.includes('bob'), 'windows username must not leak')
+})
+
+// ============================================================
 console.log(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exit(1)

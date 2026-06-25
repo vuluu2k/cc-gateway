@@ -3,7 +3,109 @@ import { StringDecoder } from 'string_decoder'
 import type { Config } from './config.js'
 import { log } from './logger.js'
 
-export type PathPair = { from: string; to: string }
+export type PathPair = {
+  from: string
+  to: string
+  // When true, the replacer only substitutes `from` if the character that
+  // follows it is a word boundary (non [A-Za-z0-9_-]) or end-of-stream. Used for
+  // a bare home dir (`/Users/jack`) so it never matches inside `/Users/jackson`.
+  boundary?: boolean
+}
+
+/**
+ * Real ↔ canonical path mapping derived once from a request, shared by the
+ * forward masker (real→canonical) and the reverse map (canonical→real) so the
+ * two directions can never drift apart.
+ */
+type PathContext = {
+  canonicalHome: string // '/Users/jack/' — trailing slash
+  homeReal?: string // '/Users/mac/' — real POSIX home prefix, undefined if none
+  // Distinct non-home cwds (e.g. /workspace/app) → distinct canonical roots,
+  // longest-real-first so the most specific prefix wins. Structure-preserving:
+  // any number of separate non-home projects reverse exactly.
+  nonHome: { real: string; canon: string }[]
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// A path token ends at whitespace, quotes, brackets, or common shell/JSON/markup
+// delimiters. ONE definition feeds both the boundary lookahead (PATH_BOUNDARY)
+// and the username char class (excludes the same chars) so the two can never
+// disagree about what terminates a path — disagreement was dropping the delimiter
+// and corrupting the masked text. `.` is deliberately NOT a boundary: paths
+// legitimately contain dots, and treating it as one would mis-split sibling dirs
+// that share a prefix (e.g. /srv/api vs /srv/api.bak).
+const PATH_BOUNDARY_INNER = '\\s"\'`<>(){}\\[\\];:,=|&$!?*'
+const PATH_BOUNDARY = `[${PATH_BOUNDARY_INNER}]`
+
+function canonicalHomeOf(config: Config): string {
+  return config.prompt_env?.working_dir?.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'
+}
+
+/**
+ * Discover the real cwd / home paths a request will mask, and the canonical
+ * targets they map to. Built from the authoritative env "Working directory:"
+ * line(s) — NOT a generic first-/Users/ scan of the whole body, because in a
+ * multi-turn session the serialized history (which precedes the system env
+ * block) can already contain the canonical home from an earlier masked turn.
+ */
+function buildPathContext(text: string, config: Config): PathContext {
+  const pe = config.prompt_env
+  const canonicalHome = canonicalHomeOf(config)
+  if (!pe?.working_dir) return { canonicalHome, nonHome: [] }
+
+  // Strip trailing sentence/markup punctuation a cwd line may carry (e.g.
+  // "Working directory: /srv/api.") so the captured root is exact — otherwise the
+  // bogus root never matches its own subpaths and the real path leaks unmasked.
+  const trimCwd = (p: string) => p.replace(/[.,;:!?)\]}>'"`]+$/, '')
+
+  // The env block holds the primary cwd as `(Primary )?Working directory: /path`,
+  // and extra roots (from --add-dir) under an `Additional working directories:`
+  // header as a bullet list, one `- /abs/path` per line. Capture BOTH — missing
+  // the bullet list would let those real roots leak unmasked. (We scan the raw
+  // request text where newlines are JSON-escaped, but the literal space after
+  // each `-` and the backslash that ends the escape keep the path captures exact.)
+  const roots: string[] = [...text.matchAll(/(?:Primary )?[Ww]orking directory:\s*(\/[^\s"\\]+)/g)].map(
+    (m) => m[1],
+  )
+  const additional = text.match(/Additional working directories:((?:(?:\\n|\n)\s*-\s*\/[^\s"\\]+)+)/)
+  if (additional) {
+    for (const m of additional[1].matchAll(/\/[^\s"\\]+/g)) roots.push(m[0])
+  }
+  const cwds = [...new Set(roots.map(trimCwd))]
+
+  // Real POSIX home prefix. Prefer an env cwd line whose prefix differs from the
+  // canonical home; fall back to a first-match body scan only when no env line
+  // is present (keeps un-masking alive across multi-turn sessions).
+  const homePrefixes = cwds
+    .map((c) => c.match(/^\/(?:Users|home)\/[^/]+\//)?.[0])
+    .filter((h): h is string => !!h)
+  const homeCandidate =
+    homePrefixes.find((h) => h !== canonicalHome) ??
+    homePrefixes[0] ??
+    text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]
+  const homeReal = homeCandidate && homeCandidate !== canonicalHome ? homeCandidate : undefined
+
+  // Distinct non-home cwds → distinct canonical roots, each a path-safe sibling of
+  // working_dir so every root round-trips even with several non-home projects in
+  // one request. The first reuses the bare working_dir ONLY when no home prefix is
+  // in play; if a home IS masked too, even index 0 takes the -cwd0 suffix so it
+  // can't alias a real home subpath that happens to share working_dir's basename
+  // (e.g. real /Users/mac/projects masking to the same /Users/jack/projects).
+  const nonHome: { real: string; canon: string }[] = []
+  let idx = 0
+  for (const c of cwds) {
+    if (/^\/(?:Users|home)\/[^/]+\//.test(c)) continue // home-based, handled above
+    if (nonHome.some((n) => n.real === c)) continue
+    const canon = idx === 0 && !homeReal ? pe.working_dir : `${pe.working_dir}-cwd${idx}`
+    nonHome.push({ real: c, canon })
+    idx++
+  }
+  nonHome.sort((a, b) => b.real.length - a.real.length)
+  return { canonicalHome, homeReal, nonHome }
+}
 
 // ── CCH hash algorithm (reverse-engineered from cli.js) ──
 const CCH_SALT = '59cf53e54c78'
@@ -55,7 +157,7 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
   }
 
   if (path.startsWith('/v1/messages')) {
-    rewriteMessagesBody(parsed, config)
+    rewriteMessagesBody(parsed, config, buildPathContext(text, config))
   } else if (path.includes('/event_logging/batch')) {
     rewriteEventBatch(parsed, config)
   } else if (path.includes('/policy_limits') || path.includes('/settings')) {
@@ -74,7 +176,7 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
  * 3. Compute hash from rewritten message (so it matches what server sees)
  * 4. Rewrite system prompt billing header using computed hash
  */
-function rewriteMessagesBody(body: any, config: Config) {
+function rewriteMessagesBody(body: any, config: Config, ctx: PathContext) {
   // Rewrite metadata.user_id
   if (body?.metadata?.user_id) {
     try {
@@ -92,11 +194,11 @@ function rewriteMessagesBody(body: any, config: Config) {
   if (Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       if (typeof msg.content === 'string') {
-        msg.content = rewriteSystemReminders(msg.content, config)
+        msg.content = rewriteSystemReminders(msg.content, config, ctx)
       } else if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block?.text) {
-            block.text = rewriteSystemReminders(block.text, config)
+            block.text = rewriteSystemReminders(block.text, config, ctx)
           }
         }
       }
@@ -129,15 +231,15 @@ function rewriteMessagesBody(body: any, config: Config) {
     for (let i = 0; i < body.system.length; i++) {
       const item = body.system[i]
       if (typeof item === 'string') {
-        body.system[i] = rewritePromptText(item, config, hash)
+        body.system[i] = rewritePromptText(item, config, hash, ctx)
       } else if (item?.text) {
-        item.text = rewritePromptText(item.text, config, hash)
+        item.text = rewritePromptText(item.text, config, hash, ctx)
       }
     }
   } else if (typeof body.system === 'string') {
     // Strip inline billing header if embedded in a single string
     body.system = body.system.replace(/x-anthropic-billing-header:[^\n]+\n?/g, '')
-    body.system = rewritePromptText(body.system, config, hash)
+    body.system = rewritePromptText(body.system, config, hash, ctx)
   }
 }
 
@@ -147,7 +249,12 @@ function rewriteMessagesBody(body: any, config: Config) {
  * When hash is provided, rewrites the billing header hash.
  * When hash is null, only rewrites env/path fields (used for messages before hash computation).
  */
-function rewritePromptText(text: string, config: Config, hash: string | null): string {
+function rewritePromptText(
+  text: string,
+  config: Config,
+  hash: string | null,
+  ctx: PathContext,
+): string {
   const pe = config.prompt_env
   if (!pe) return text
 
@@ -178,21 +285,34 @@ function rewritePromptText(text: string, config: Config, hash: string | null): s
     `OS Version: ${pe.os_version}`,
   )
 
-  // 3. Working directory line. A home-based cwd (/Users/x/… or /home/x/…) is
-  //    LEFT for Step 4 to mask structurally — swap only the home prefix, keep
-  //    the project subpath — which is reversible for any number of distinct
-  //    cwds/projects in one request. Only a non-home cwd (no username to hide)
-  //    is collapsed to the canonical working_dir.
+  // 3. Non-home cwds (/workspace/app, /srv/api, …) → their distinct canonical
+  //    roots, applied as a GLOBAL prefix swap (not just the cwd line) so every
+  //    subpath under each project is masked and reverses exactly. Longest real
+  //    prefix first (ctx.nonHome is pre-sorted) so /a/b wins over /a.
+  for (const n of ctx.nonHome) {
+    const re = new RegExp(`${escapeRegExp(n.real)}(/|(?=${PATH_BOUNDARY}|$))`, 'g')
+    result = result.replace(re, (_m, slash) => `${n.canon}${slash || ''}`)
+  }
+
+  // 4. Home directory paths: /Users/xxx/… and /home/xxx/… → swap username only,
+  //    keeping the rest of the path so it round-trips. Also matches a BARE home
+  //    dir (/Users/xxx with no trailing slash, e.g. `cd $HOME`, `HOME=…`) via the
+  //    boundary lookahead — that form previously leaked the real username.
   result = result.replace(
-    /((?:Primary )?[Ww]orking directory:\s*)(\/\S+)/g,
-    (m, label, p) => (/^\/(?:Users|home)\/[^/]+\//.test(p) ? m : `${label}${pe.working_dir}`),
+    new RegExp(`/(?:Users|home)/[^/${PATH_BOUNDARY_INNER}]+(/|(?=${PATH_BOUNDARY}|$))`, 'g'),
+    (_m, slash) => (slash === '/' ? ctx.canonicalHome : ctx.canonicalHome.replace(/\/$/, '')),
   )
 
-  // 4. Home directory paths: /Users/xxx/, /home/xxx/ → swap username only,
-  //    preserving the rest of the path (also masks the home-based cwd above).
+  // 5. Windows home paths: C:\Users\xxx\… → swap username only, preserving the
+  //    drive and backslash structure. Forward-only privacy mask (a Windows client
+  //    posed as darwin can't round-trip backslash tool paths, so it is not
+  //    reverse-mapped) — the point is to not leak the real Windows username. The
+  //    canonical name reuses the POSIX home username so the model sees one
+  //    consistent fake identity across both path styles.
+  const winUser = ctx.canonicalHome.replace(/^\/[^/]+\//, '').replace(/\/$/, '')
   result = result.replace(
-    /\/(?:Users|home)\/[^/\s]+\//g,
-    `${pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'}`,
+    new RegExp(`([A-Za-z]:\\\\Users\\\\)[^\\\\/${PATH_BOUNDARY_INNER}]+(\\\\|(?=${PATH_BOUNDARY}|$))`, 'g'),
+    (_m, head, sep) => `${head}${winUser}${sep === '\\' ? '\\' : ''}`,
   )
 
   return result
@@ -210,36 +330,26 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
   const pe = config.prompt_env
   if (!pe?.working_dir || pe.reverse_paths === false) return []
 
-  const text = body.toString('utf-8')
-  const canonicalHome = pe.working_dir.match(/^\/[^/]+\/[^/]+\//)?.[0] || '/Users/user/'
+  // Same context the forward masker used, inverted (canonical → real). Sharing
+  // buildPathContext guarantees the two directions stay exact inverses.
+  const ctx = buildPathContext(body.toString('utf-8'), config)
   const pairs: PathPair[] = []
 
-  // Non-home cwds are the only ones Step 3 collapses into working_dir; map that
-  // back to the first such cwd. Home-based cwds keep their structure (Step 4
-  // swaps just the username) and are reversed by the home-prefix pair below —
-  // which covers ANY number of distinct projects/cwds under that home.
-  const cwds = [...text.matchAll(/(?:Primary )?[Ww]orking directory:\s*(\/[^\s"\\]+)/g)].map((m) => m[1])
-  const nonHomeCwd = cwds.find((c) => !/^\/(?:Users|home)\/[^/]+\//.test(c))
-  if (nonHomeCwd && nonHomeCwd !== pe.working_dir) pairs.push({ from: pe.working_dir, to: nonHomeCwd })
+  // Non-home projects: each distinct canonical root reverses to its real cwd.
+  for (const n of ctx.nonHome) pairs.push({ from: n.canon, to: n.real })
 
-  // Real home prefix (what Step 4 collapses into canonicalHome). Derive it from
-  // the authoritative env "Working directory:" line(s) — NOT a generic first-
-  // /Users/ scan of the whole body. In a multi-turn session the conversation
-  // history (which serializes BEFORE the system env block) can already contain
-  // the canonical /Users/jack/ from an earlier masked turn; a first-match scan
-  // locks onto that, concludes home === canonicalHome, and silently drops the
-  // reverse pair for the rest of the session — turning un-masking off. The cwd
-  // lines come from the client's freshly-injected env, so they always hold the
-  // real home pre-mask. Prefer one whose prefix differs from the canonical home;
-  // fall back to a first-match scan only when no env line is present at all.
-  const homePrefixes = cwds
-    .map((c) => c.match(/^\/(?:Users|home)\/[^/]+\//)?.[0])
-    .filter((h): h is string => !!h)
-  const home =
-    homePrefixes.find((h) => h !== canonicalHome) ??
-    homePrefixes[0] ??
-    text.match(/\/(?:Users|home)\/[^/\s"\\]+\//)?.[0]
-  if (home && home !== canonicalHome) pairs.push({ from: canonicalHome, to: home })
+  // Home prefix: covers ANY number of distinct projects/cwds under that home,
+  // since the username swap is structure-preserving. The bare-home pair (no
+  // trailing slash) reverses `cd $HOME` / `HOME=…` style refs; it is boundary-
+  // guarded so /Users/jack never matches inside /Users/jackson.
+  if (ctx.homeReal) {
+    pairs.push({ from: ctx.canonicalHome, to: ctx.homeReal })
+    pairs.push({
+      from: ctx.canonicalHome.replace(/\/$/, ''),
+      to: ctx.homeReal.replace(/\/$/, ''),
+      boundary: true,
+    })
+  }
 
   // Apply the most specific (longest) prefix first so working_dir wins over the
   // bare home prefix it contains (e.g. /Users/jack/projects before /Users/jack/).
@@ -256,25 +366,53 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
  */
 export function createPathReplacer(pairs: PathPair[]) {
   const decoder = new StringDecoder('utf8')
-  const froms = pairs.map((p) => p.from)
-  const maxFrom = Math.max(...froms.map((f) => f.length), 1)
+  // Longest 'from' first so a specific prefix (/Users/jack/projects) wins over a
+  // shorter one it contains (/Users/jack/), and the trailing-slash home pair wins
+  // over the bare-home boundary pair.
+  const ordered = [...pairs].sort((a, b) => b.from.length - a.from.length)
+  const maxFrom = Math.max(...ordered.map((p) => p.from.length), 1)
   let pending = '' // unreplaced carry-over: a partial prefix of some 'from'
+  const isWord = (ch: string) => /[A-Za-z0-9_-]/.test(ch)
 
-  const apply = (s: string): string => {
-    for (const p of pairs) s = s.split(p.from).join(p.to)
-    return s
+  // Positional left-to-right scan (needed for boundary pairs, which depend on the
+  // char that follows the match). `atEnd` marks end-of-stream, where a boundary
+  // pair's missing follow char counts as a boundary.
+  const apply = (s: string, atEnd: boolean): string => {
+    let out = ''
+    let i = 0
+    while (i < s.length) {
+      let matched = false
+      for (const p of ordered) {
+        if (!s.startsWith(p.from, i)) continue
+        if (p.boundary) {
+          const next = s[i + p.from.length]
+          if (next === undefined ? !atEnd : isWord(next)) continue
+        }
+        out += p.to
+        i += p.from.length
+        matched = true
+        break
+      }
+      if (!matched) {
+        out += s[i]
+        i++
+      }
+    }
+    return out
   }
 
-  // Length of the longest suffix of s that is a STRICT prefix of some 'from'.
-  // Those trailing chars might still grow into a match — or into a longer match
-  // that supersedes a shorter one sharing the prefix (e.g. /Users/jack/ vs
-  // /Users/jack/projects) — so they're held back until the next chunk arrives.
+  // Chars to hold back until the next chunk: (a) a suffix that is a STRICT prefix
+  // of some 'from' (might still grow into a match, or into a longer one that
+  // supersedes a shorter shared prefix), and (b) a full boundary-'from' sitting
+  // at the very end (we need its follow char to confirm the boundary).
   const heldBack = (s: string): number => {
-    const max = Math.min(s.length, maxFrom - 1)
+    const max = Math.min(s.length, maxFrom)
     for (let k = max; k >= 1; k--) {
       const suf = s.slice(s.length - k)
-      for (const f of froms) {
+      for (const p of ordered) {
+        const f = p.from
         if (f.length > k && f.startsWith(suf)) return k
+        if (p.boundary && f.length === k && f === suf) return k
       }
     }
     return 0
@@ -286,10 +424,10 @@ export function createPathReplacer(pairs: PathPair[]) {
       const cut = pending.length - heldBack(pending)
       const head = pending.slice(0, cut)
       pending = pending.slice(cut)
-      return apply(head)
+      return apply(head, false)
     },
     flush(): string {
-      const out = apply(pending + decoder.end())
+      const out = apply(pending + decoder.end(), true)
       pending = ''
       return out
     },
@@ -301,11 +439,11 @@ export function createPathReplacer(pairs: PathPair[]) {
  * These are injected by Claude Code (env info, git status, etc.) — not user-authored.
  * User-written text outside these tags is left untouched to preserve intent.
  */
-function rewriteSystemReminders(text: string, config: Config): string {
+function rewriteSystemReminders(text: string, config: Config, ctx: PathContext): string {
   return text.replace(
     /(<system-reminder>)([\s\S]*?)(<\/system-reminder>)/g,
     (_match, open, content, close) => {
-      return open + rewritePromptText(content, config, null) + close
+      return open + rewritePromptText(content, config, null, ctx) + close
     },
   )
 }
