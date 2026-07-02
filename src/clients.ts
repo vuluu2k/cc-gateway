@@ -246,9 +246,25 @@ function Test-GuiHijack {
   return (-not [string]::IsNullOrEmpty($url))
 }
 
+# Pre-approve this token in ~/.claude.json so Claude Code never shows the
+# "Detected a custom API key ... Do you want to use this API key?" prompt.
+# Claude Code records approval as the key's last 20 characters. Requires node
+# (a real JSON parser) - PowerShell's ConvertTo-Json can silently truncate
+# deep structures in the user's ~/.claude.json, so we skip rather than risk it.
+function Approve-Token {
+  $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $node) { return }
+  $cj = Join-Path $env:USERPROFILE ".claude.json"
+  if ($ClientToken.Length -lt 20) { return }
+  $tail = $ClientToken.Substring($ClientToken.Length - 20)
+  $js = 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];if(!a.includes(t)){a.push(t);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}'
+  try { & $node.Source -e $js $cj $tail 2>$null | Out-Null } catch {}
+}
+
 function Invoke-HijackGui {
   [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $ClientToken, "User")
   [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $GatewayUrl, "User")
+  Approve-Token
   Write-Host "Done. GUI apps (VS Code / Cursor) will route through gateway."
   Write-Host "  Fully Quit and reopen VS Code / Cursor for the extension to pick up the env vars."
   Write-Host "  Undo: ccg release-gui"
@@ -391,6 +407,9 @@ $env:ANTHROPIC_BASE_URL = $GatewayUrl
 $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
 $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "false"
 
+# Skip the one-time "use this API key?" confirmation for this token.
+Approve-Token
+
 if (-not (Test-GatewayHealth)) {
   Write-Host "Warning: Gateway at $GatewayUrl is not reachable."
   Write-Host "Make sure the gateway is running."
@@ -445,6 +464,37 @@ case "$SHELL" in
 esac
 ALIAS_TAG="# cc-gateway alias"
 
+# Pre-approve this token in ~/.claude.json so Claude Code never shows the
+# "Detected a custom API key ... Do you want to use this API key?" prompt.
+# Claude Code records approval as the key's last 20 characters.
+approve_token() {
+  CLAUDE_JSON="$HOME/.claude.json"
+  KEY_TAIL="\${CLIENT_TOKEN: -20}"
+  [[ \${#CLIENT_TOKEN} -lt 20 ]] && return 0
+  if command -v node >/dev/null 2>&1; then
+    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];if(!a.includes(t)){a.push(t);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+p,t=sys.argv[1],sys.argv[2]
+try:
+    j=json.load(open(p))
+except Exception:
+    j={}
+if not isinstance(j,dict): j={}
+r=j.setdefault("customApiKeyResponses",{})
+if not isinstance(r,dict):
+    r={}; j["customApiKeyResponses"]=r
+a=r.setdefault("approved",[])
+if not isinstance(a,list):
+    a=[]; r["approved"]=a
+if t not in a:
+    a.append(t)
+    open(p,"w").write(json.dumps(j,indent=2)+"\\n")' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null
+  fi
+  return 0
+}
+
 # ── Subcommands ──
 
 case "$1" in
@@ -454,6 +504,19 @@ case "$1" in
     fi
     chmod +x "$INSTALL_PATH" 2>/dev/null || sudo chmod +x "$INSTALL_PATH"
     echo "Installed as 'ccg' at $INSTALL_PATH."
+    # Overwrite stale ccg copies from earlier installs (possibly pointing at
+    # another gateway) so this launcher wins regardless of PATH order.
+    for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+      OTHER="$d/ccg"
+      if [[ "$OTHER" != "$INSTALL_PATH" && -f "$OTHER" ]]; then
+        if cp "$0" "$OTHER" 2>/dev/null; then
+          echo "Updated stale ccg at $OTHER."
+        else
+          echo "Warning: stale ccg at $OTHER could not be updated and may shadow this one."
+          echo "  Remove it with: sudo rm $OTHER"
+        fi
+      fi
+    done
     case ":$PATH:" in
       *":$INSTALL_DIR:"*) ;;
       *)
@@ -559,6 +622,7 @@ PLIST
         launchctl load "$PLIST_PATH"
         launchctl setenv ANTHROPIC_API_KEY "$CLIENT_TOKEN"
         launchctl setenv ANTHROPIC_BASE_URL "$GATEWAY_URL"
+        approve_token
         echo "Done. GUI apps (VS Code / Cursor) will route through gateway."
         echo "  Fully Quit and reopen VS Code / Cursor (Cmd+Q, not just close window)."
         echo "  Undo: ccg release-gui"
@@ -572,6 +636,7 @@ ANTHROPIC_API_KEY=$CLIENT_TOKEN
 ANTHROPIC_BASE_URL=$GATEWAY_URL
 ENVCONF
         chmod 600 "$ENV_FILE"
+        approve_token
         echo "Done. Wrote $ENV_FILE."
         echo "  Log out and back in (or restart) for the systemd user session to pick this up."
         echo "  Undo: ccg release-gui"
@@ -687,6 +752,9 @@ export ANTHROPIC_BASE_URL="$GATEWAY_URL"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export CLAUDE_CODE_ATTRIBUTION_HEADER=false
 
+# Skip the one-time "use this API key?" confirmation for this token.
+approve_token
+
 # Check gateway is reachable
 HEALTH=$(curl -sk --max-time 3 "\${GATEWAY_URL}/_health" 2>/dev/null)
 if [[ -z "$HEALTH" ]]; then
@@ -721,6 +789,19 @@ mkdir -p "$INSTALL_DIR"
 cat > "$INSTALL_DIR/ccg" <<'${DELIM}'
 ${launcher}${DELIM}
 chmod +x "$INSTALL_DIR/ccg"
+
+# A previous install (possibly for another gateway) may have left a ccg in a
+# dir that shadows ~/.local/bin on PATH. Overwrite those copies too so this
+# gateway always wins.
+for d in /opt/homebrew/bin /usr/local/bin; do
+  if [ -f "$d/ccg" ]; then
+    if cp "$INSTALL_DIR/ccg" "$d/ccg" 2>/dev/null; then
+      echo "   • Updated existing ccg at $d/ccg"
+    else
+      echo "   ⚠ Stale ccg at $d/ccg may shadow the new one — remove it: sudo rm $d/ccg"
+    fi
+  fi
+done
 
 # Make sure ~/.local/bin is on PATH for future shells.
 case "$SHELL" in
