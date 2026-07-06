@@ -173,6 +173,7 @@ const M: Record<string, Entry> = {
   'th.in': { en: 'In', vi: 'Vào', zh: '入' },
   'th.out': { en: 'Out', vi: 'Ra', zh: '出' },
   'th.message': { en: 'Message', vi: 'Tin nhắn', zh: '消息' },
+  'th.errorSource': { en: 'Error source', vi: 'Nguồn lỗi', zh: '错误来源' },
   'portal.install.intro': { en: 'Pick your platform, download your personal launcher, and follow the steps. The launcher routes Claude Code through this gateway using your token — nothing is written to your shell config until you opt in.', vi: 'Chọn nền tảng, tải trình khởi chạy cá nhân và làm theo các bước. Trình khởi chạy định tuyến Claude Code qua cổng này bằng token của bạn — không ghi gì vào cấu hình shell cho đến khi bạn đồng ý.', zh: '选择平台，下载你的个人启动器并按步骤操作。启动器使用你的令牌让 Claude Code 经由此网关 — 在你同意前不会写入任何 shell 配置。' },
   'portal.install.download': { en: 'Download launcher', vi: 'Tải trình khởi chạy', zh: '下载启动器' },
   'portal.install.file': { en: 'File:', vi: 'Tệp:', zh: '文件：' },

@@ -15,7 +15,7 @@
     "add-user:dev": "tsx src/scripts/add-user.ts",
     "update-version": "node dist/scripts/update-version.js",
     "update-version:dev": "tsx src/scripts/update-version.ts",
-    "test": "tsx tests/rewriter.test.ts"
+    "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

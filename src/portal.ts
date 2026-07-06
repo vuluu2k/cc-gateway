@@ -480,7 +480,7 @@ ${SHARED_HEAD_STYLE}
           const hasUsage = r.inputTokens || r.outputTokens;
           return '<tr><td class="muted">' + fmtAgo(r.ts) + '</td>'
             + '<td><span class="muted">' + esc(shortModel(r.model)) + '</span></td>'
-            + '<td><span class="pill ' + cls + '">' + r.status + '</span></td>'
+            + '<td><span class="pill ' + cls + '"' + (r.errorDetail ? ' title="' + esc(r.errorDetail) + '"' : '') + '>' + r.status + (r.errorSource ? ' · ' + esc(r.errorSource) : '') + '</span></td>'
             + '<td class="num">' + r.durationMs + 'ms</td>'
             + '<td class="num">' + (hasUsage ? fmtTokens(r.inputTokens) : '—') + '</td>'
             + '<td class="num">' + (hasUsage ? fmtTokens(r.outputTokens) : '—') + '</td>'

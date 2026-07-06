@@ -7,7 +7,8 @@ import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, initAuth, setAuthTokens } from './auth.js'
 import { getAccessToken } from './oauth.js'
-import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer } from './rewriter.js'
+import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from './rewriter.js'
+import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
 import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
@@ -40,61 +41,9 @@ import {
 import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
 
-const USER_MESSAGE_MAX = 200
-
 /** Refresh in-memory token map from current config.yaml on disk. */
 function reloadAuthFromConfig(): void {
   setAuthTokens(listClients())
-}
-
-// Claude Code wraps a lot of synthetic context (hook output, slash-command
-// metadata, reminders) inside the user message stream. None of it is text the
-// human typed, so it shouldn't appear in the dashboard preview.
-const SYNTHETIC_BLOCK_RE = /<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr|user-prompt-submit-hook)>[\s\S]*?<\/\1>/gi
-
-function stripSyntheticBlocks(text: string): string {
-  return text.replace(SYNTHETIC_BLOCK_RE, '').replace(/\s+/g, ' ').trim()
-}
-
-/**
- * Pull the most recent user-authored text out of a /v1/messages request body.
- * Returns truncated text suitable for a dashboard preview, or '' if not parseable.
- */
-function extractLastUserMessage(body: Buffer): string {
-  if (!body.length) return ''
-  try {
-    const obj = JSON.parse(body.toString('utf-8'))
-    const msgs = obj?.messages
-    if (!Array.isArray(msgs)) return ''
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]
-      if (!m || m.role !== 'user') continue
-      let text = ''
-      if (typeof m.content === 'string') {
-        text = m.content
-      } else if (Array.isArray(m.content)) {
-        const parts: string[] = []
-        for (const block of m.content) {
-          if (block?.type === 'text' && typeof block.text === 'string') {
-            parts.push(block.text)
-          } else if (block?.type === 'tool_result') {
-            // Skip tool_result blocks — keep walking back for an authored prompt
-            continue
-          }
-        }
-        text = parts.join('\n').trim()
-      }
-      const flat = stripSyntheticBlocks(text)
-      if (flat) {
-        return flat.length > USER_MESSAGE_MAX
-          ? flat.slice(0, USER_MESSAGE_MAX) + '…'
-          : flat
-      }
-    }
-    return ''
-  } catch {
-    return ''
-  }
 }
 
 export function startProxy(config: Config) {
@@ -186,7 +135,7 @@ async function handleRequest(
   if (pathname === '/_verify') {
     const entry = authenticate(req)
     if (!entry) {
-      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.writeHead(401, { 'Content-Type': 'application/json', 'x-ccg-error': 'unauthorized' })
       res.end(JSON.stringify({ error: 'Unauthorized' }))
       return
     }
@@ -199,7 +148,7 @@ async function handleRequest(
   // Authenticate client (proxy-level auth)
   const tokenEntry = authenticate(req)
   if (!tokenEntry) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.writeHead(401, { 'Content-Type': 'application/json', 'x-ccg-error': 'unauthorized' })
     res.end(JSON.stringify({ error: 'Unauthorized - provide client token via x-api-key header' }))
     log('warn', `Unauthorized request: ${method} ${path}`)
     return
@@ -213,7 +162,7 @@ async function handleRequest(
     const used = getClientCostSince(clientName, since)
     if (used >= tokenEntry.cost_limit_usd) {
       const periodLabel = tokenEntry.cost_limit_period || 'lifetime'
-      res.writeHead(429, { 'Content-Type': 'application/json' })
+      res.writeHead(429, { 'Content-Type': 'application/json', 'x-ccg-error': 'cost-limit' })
       res.end(JSON.stringify({
         error: 'Cost limit reached',
         client: clientName,
@@ -229,6 +178,8 @@ async function handleRequest(
         path: pathname,
         status: 429,
         durationMs: Date.now() - startedAt,
+        errorSource: 'gateway',
+        errorDetail: `cost limit reached: ${used.toFixed(4)}/${tokenEntry.cost_limit_usd} USD (${periodLabel})`,
       })
       if (config.logging.audit) audit(clientName, method, path, 429)
       return
@@ -240,9 +191,20 @@ async function handleRequest(
   // Get the real OAuth token (managed by gateway)
   const oauthToken = getAccessToken()
   if (!oauthToken) {
-    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'oauth-refreshing' })
     res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
     log('error', 'No valid OAuth token available')
+    recordRequest({
+      ts: startedAt,
+      client: clientName,
+      method,
+      path: pathname,
+      status: 503,
+      durationMs: Date.now() - startedAt,
+      errorSource: 'gateway',
+      errorDetail: 'oauth token unavailable (refreshing)',
+    })
+    if (config.logging.audit) audit(clientName, method, path, 503)
     return
   }
 
@@ -253,12 +215,13 @@ async function handleRequest(
   }
   let body = Buffer.concat(chunks)
 
-  // Capture last user message for dashboard preview before rewrite (rewrite
-  // doesn't touch authored content, but parsing pre-rewrite avoids re-parsing
-  // a serialized JSON we just produced). Best-effort — never blocks the call.
+  // Capture a preview of the request's actual last message (human prompt,
+  // tool_result payload, classifier text, …) for the dashboard, before rewrite
+  // so parsing isn't re-done on a JSON we just serialized. Best-effort — never
+  // blocks the call.
   let userMessage = ''
   if (body.length > 0 && pathname.startsWith('/v1/messages') && method === 'POST') {
-    userMessage = extractLastUserMessage(body)
+    userMessage = extractRequestPreview(body)
   }
 
   // Capture the real cwd / home paths BEFORE masking so the model's response
@@ -270,9 +233,10 @@ async function handleRequest(
       : []
 
   // Rewrite identity fields in body
+  const rewriteInfo: RewriteInfo = {}
   if (body.length > 0) {
     try {
-      body = rewriteBody(body, path, config) as Buffer<ArrayBuffer>
+      body = rewriteBody(body, path, config, rewriteInfo) as Buffer<ArrayBuffer>
     } catch (err) {
       log('error', `Body rewrite failed for ${path}: ${err}`)
     }
@@ -367,6 +331,12 @@ async function handleRequest(
 
       const parser = wantUsage ? new SSEUsageParser() : null
 
+      // Anything >=400 reaching this callback came FROM upstream (gateway-
+      // generated errors return before forwarding). The detail is filled once
+      // the error body has been buffered and decoded below.
+      let errorSource: 'gateway' | 'upstream' | '' = ''
+      let errorDetail = ''
+
       let finalized = false
       const finalize = () => {
         if (finalized) return
@@ -382,13 +352,18 @@ async function handleRequest(
           path: pathname,
           status,
           durationMs: Date.now() - startedAt,
-          model: usage?.model,
+          // Usage parser only yields a model on 2xx — fall back to the model we
+          // sent upstream so 429/5xx rows are attributable per-model in the
+          // dashboard (e.g. an exhausted Opus bucket vs a healthy Sonnet one).
+          model: usage?.model ?? rewriteInfo.model,
           inputTokens: usage?.inputTokens,
           outputTokens: usage?.outputTokens,
           cacheReadTokens: usage?.cacheReadTokens,
           cacheCreationTokens: usage?.cacheCreationTokens,
           costUsd: cost,
           userMessage,
+          errorSource,
+          errorDetail,
         })
         if (config.logging.audit) {
           audit(clientName, method, path, status)
@@ -410,6 +385,7 @@ async function handleRequest(
         : null
 
       if (status >= 400) {
+        errorSource = 'upstream'
         // Error responses (4xx/5xx) are small JSON, not SSE — buffer a copy
         // while forwarding the raw bytes byte-identical to the client, then
         // decode and log Anthropic's actual error payload (type + message). This
@@ -439,6 +415,7 @@ async function handleRequest(
             text = raw.toString('utf8')
           }
           const body = text.replace(/\s+/g, ' ').trim().slice(0, ERR_LOG_CAP)
+          errorDetail = body.slice(0, 500)
           log('warn', `Upstream ${status} for "${clientName}" ${method} ${path}: ${body}`)
           finalize()
         })
@@ -550,7 +527,7 @@ async function handleRequest(
   proxyReq.on('error', (err) => {
     log('error', `Upstream error: ${err.message}`)
     if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'application/json' })
+      res.writeHead(502, { 'Content-Type': 'application/json', 'x-ccg-error': 'upstream-unreachable' })
       res.end(JSON.stringify({ error: 'Bad gateway', detail: err.message }))
     }
     recordRequest({
@@ -560,7 +537,10 @@ async function handleRequest(
       path: pathname,
       status: 502,
       durationMs: Date.now() - startedAt,
+      model: rewriteInfo.model,
       userMessage,
+      errorSource: 'gateway',
+      errorDetail: `upstream unreachable: ${err.message}`,
     })
     if (config.logging.audit) {
       audit(clientName, method, path, 502)

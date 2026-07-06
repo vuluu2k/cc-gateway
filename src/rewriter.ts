@@ -145,7 +145,16 @@ function extractFirstUserMessage(messages: any[]): string {
  * 1. /v1/messages - rewrite metadata.user_id JSON blob
  * 2. /api/event_logging/batch - rewrite event_data identity/env/process fields
  */
-export function rewriteBody(body: Buffer, path: string, config: Config): Buffer {
+export type RewriteInfo = {
+  // The model this request sends upstream (read-only capture, never modified).
+  // Lets the proxy attribute FAILED requests to a model in metrics — the usage
+  // parser only yields a model on 2xx responses, so without this every
+  // 429/5xx row is model-less and per-model throttling (e.g. an exhausted
+  // Opus bucket) is invisible.
+  model?: string
+}
+
+export function rewriteBody(body: Buffer, path: string, config: Config, info?: RewriteInfo): Buffer {
   const text = body.toString('utf-8')
 
   let parsed: unknown
@@ -157,7 +166,7 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
   }
 
   if (path.startsWith('/v1/messages')) {
-    rewriteMessagesBody(parsed, config, buildPathContext(text, config))
+    rewriteMessagesBody(parsed, config, buildPathContext(text, config), info)
   } else if (path.includes('/event_logging/batch')) {
     rewriteEventBatch(parsed, config)
   } else if (path.includes('/policy_limits') || path.includes('/settings')) {
@@ -176,7 +185,9 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
  * 3. Compute hash from rewritten message (so it matches what server sees)
  * 4. Rewrite system prompt billing header using computed hash
  */
-function rewriteMessagesBody(body: any, config: Config, ctx: PathContext) {
+function rewriteMessagesBody(body: any, config: Config, ctx: PathContext, info?: RewriteInfo) {
+  if (info && typeof body?.model === 'string') info.model = body.model
+
   // Rewrite metadata.user_id
   if (body?.metadata?.user_id) {
     try {

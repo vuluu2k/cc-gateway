@@ -1,4 +1,4 @@
-import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer } from '../src/rewriter.js'
+import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from '../src/rewriter.js'
 import type { Config } from '../src/config.js'
 import { strict as assert } from 'assert'
 
@@ -82,6 +82,25 @@ test('rewrites device_id in metadata.user_id', () => {
   assert.equal(userId.device_id, config.identity.device_id)
   assert.equal(userId.account_uuid, 'acct-123', 'account_uuid should be preserved')
   assert.equal(userId.session_id, 'sess-456', 'session_id should be preserved')
+})
+
+// ============================================================
+console.log('\n/v1/messages - request model passthrough')
+// ============================================================
+
+test('model passes through unchanged — upstream sees exactly what the client sent', () => {
+  const body = { model: 'claude-opus-4-8', messages: [] }
+  const result = JSON.parse(
+    rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config).toString(),
+  )
+  assert.equal(result.model, 'claude-opus-4-8')
+})
+
+test('RewriteInfo.model records the model sent upstream', () => {
+  const info: RewriteInfo = {}
+  const body = { model: 'claude-opus-4-8', messages: [] }
+  rewriteBody(Buffer.from(JSON.stringify(body)), '/v1/messages', config, info)
+  assert.equal(info.model, 'claude-opus-4-8')
 })
 
 // ============================================================
