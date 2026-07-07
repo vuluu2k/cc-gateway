@@ -374,6 +374,23 @@ ${i18nHead()}
   .limit-bar > span { display: block; height: 100%; background: var(--ok); }
   .limit-bar > span.warn { background: var(--warn); }
   .limit-bar > span.err { background: var(--err); }
+  /* Session-quota panel: one card per rolling window (5h / weekly). */
+  .quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .quota-win { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .quota-win .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .quota-win .name { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  .quota-win .name .rep { margin-left: 6px; color: var(--accent); font-size: 10px; }
+  .quota-win .pct { font-family: var(--mono); font-size: 24px; font-weight: 600; line-height: 1; }
+  .quota-win .pct .unit { font-size: 13px; color: var(--muted); }
+  .quota-bar { height: 8px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+  .quota-bar > span { display: block; height: 100%; background: var(--ok); transition: width .4s ease; }
+  .quota-bar > span.warn { background: var(--warn); }
+  .quota-bar > span.err { background: var(--err); }
+  .quota-win .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .quota-raw { margin-top: 12px; }
+  .quota-raw summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .quota-raw table { margin-top: 8px; }
+  .quota-raw td { font-size: 12px; word-break: break-all; }
   .toolbar { display: flex; align-items: center; gap: 12px; }
   select, button {
     background: var(--panel-2); color: var(--fg);
@@ -459,6 +476,7 @@ ${i18nHead()}
   </div>
   <nav id="sideNav">
     <a href="#topStats" class="active"><span class="icon">▦</span><span data-i18n="admin.nav.overview">Overview</span></a>
+    <a href="#quota"><span class="icon">◔</span><span data-i18n="admin.nav.quota">Session quota</span></a>
     <a href="#periods"><span class="icon">$</span><span data-i18n="admin.nav.periods">Cost &amp; periods</span></a>
     <a href="#charts"><span class="icon">∿</span><span data-i18n="admin.nav.traffic">Traffic</span></a>
     <a href="#models"><span class="icon">◇</span><span data-i18n="admin.nav.models">By model</span></a>
@@ -487,6 +505,17 @@ ${i18nHead()}
 <main>
   <div class="grid">
     <div class="row" id="topStats"></div>
+    <section id="quota" class="card">
+      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic account</h2>
+      <p class="meta" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
+        Live 5-hour rolling and weekly usage for the shared subscription account,
+        read from Anthropic's response headers. This is the whole account's quota,
+        shared across every client on this gateway.
+      </p>
+      <div id="quotaBody"></div>
+      <h2 style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
+      <div id="sessionModelsTable"></div>
+    </section>
     <section id="periods" class="card">
       <h2 data-i18n="admin.sec.periods">Cost &amp; usage by period</h2>
       <div id="periodTable"></div>
@@ -931,6 +960,110 @@ ${i18nHead()}
       </table>\`;
   };
 
+  // ── Session quota (Anthropic account 5h + weekly windows) ──
+  const statusPill = (status) => {
+    const s = String(status || '').toLowerCase();
+    if (!s) return '';
+    if (s.includes('reject') || s.includes('limit') || s.includes('exceed')) return 'err';
+    if (s.includes('warn')) return 'warn';
+    return 'ok';
+  };
+  const fmtCountdown = (resetMs) => {
+    const d = resetMs - Date.now();
+    if (d <= 0) return t('admin.quota.resetting');
+    const s = Math.floor(d / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h) return h + 'h ' + m + 'm';
+    if (m) return m + 'm ' + sec + 's';
+    return sec + 's';
+  };
+
+  const renderQuota = (data) => {
+    const host = document.getElementById('quotaBody');
+    const q = data.quota;
+    if (!q || !q.windows || !q.windows.length) {
+      host.innerHTML = '<div class="empty">' + esc(t('admin.quota.none')) + '</div>';
+      return;
+    }
+    const winLabel = { '5h': t('admin.quota.win5h'), '7d': t('admin.quota.win7d') };
+    const repKey = q.representative === 'seven_day' ? '7d'
+      : q.representative === 'five_hour' ? '5h' : '';
+    const cards = q.windows.map(w => {
+      const hasPct = w.usedPct != null;
+      const pct = hasPct ? Math.round(w.usedPct) : null;
+      const barCls = !hasPct ? '' : pct >= 90 ? 'err' : pct >= 75 ? 'warn' : '';
+      const rep = repKey && w.key === repKey
+        ? '<span class="rep">● ' + esc(t('admin.quota.rep')) + '</span>' : '';
+      const pctBlock = hasPct
+        ? '<div class="pct">' + pct + '<span class="unit">% ' + esc(t('admin.quota.usedWord')) + '</span></div>'
+        : '<div class="pct" style="font-size:15px">' + esc(w.status || '—') + '</div>';
+      const bar = hasPct
+        ? '<div class="quota-bar"><span class="' + barCls + '" style="width:' + pct + '%"></span></div>'
+        : '';
+      const leftTxt = hasPct ? t('admin.quota.leftLabel', { pct: Math.max(0, 100 - pct) }) : '';
+      const resetTxt = w.resetMs
+        ? '<span class="reset" data-reset="' + w.resetMs + '">'
+          + esc(t('admin.quota.resetIn', { t: fmtCountdown(w.resetMs) })) + '</span>'
+        : '';
+      return \`
+        <div class="quota-win">
+          <div class="top">
+            <span class="name">\${esc(winLabel[w.key] || w.key)}\${rep}</span>
+            \${w.status ? '<span class="pill ' + statusPill(w.status) + '">' + esc(w.status) + '</span>' : ''}
+          </div>
+          \${pctBlock}
+          \${bar}
+          <div class="foot"><span>\${esc(leftTxt)}</span>\${resetTxt}</div>
+        </div>\`;
+    }).join('');
+    const rawRows = Object.keys(q.raw || {}).sort().map(k =>
+      '<tr><td>' + esc(k) + '</td><td class="num">' + esc(q.raw[k]) + '</td></tr>').join('');
+    const raw = rawRows
+      ? \`<details class="quota-raw"><summary>\${esc(t('admin.quota.rawSummary'))}</summary>
+          <table><tbody>\${rawRows}</tbody></table></details>\`
+      : '';
+    host.innerHTML = '<div class="quota-grid">' + cards + '</div>' + raw;
+  };
+
+  const tickQuotaResets = () => {
+    document.querySelectorAll('#quotaBody .reset[data-reset]').forEach(el => {
+      const rm = Number(el.getAttribute('data-reset'));
+      if (Number.isFinite(rm)) el.textContent = t('admin.quota.resetIn', { t: fmtCountdown(rm) });
+    });
+  };
+
+  const renderSessionModels = (data) => {
+    const el = document.getElementById('sessionModelsTable');
+    if (!data.sessionModels || !data.sessionModels.length) {
+      el.innerHTML = '<div class="empty">' + esc(t('admin.empty.noSessionModels')) + '</div>';
+      return;
+    }
+    const rows = data.sessionModels.map(m => \`<tr>
+      <td data-label=""><strong>\${shortModel(m.model)}</strong></td>
+      <td class="num" data-label="\${esc(t('th.calls'))}">\${fmtNum(m.total)}</td>
+      <td class="num" data-label="\${esc(t('th.input'))}">\${fmtTokens(m.inputTokens)}</td>
+      <td class="num" data-label="\${esc(t('th.output'))}">\${fmtTokens(m.outputTokens)}</td>
+      <td class="num" data-label="\${esc(t('admin.stat.cacheRead'))}">\${fmtTokens(m.cacheReadTokens)}</td>
+      <td class="num" data-label="\${esc(t('admin.stat.cacheWrite'))}">\${fmtTokens(m.cacheCreationTokens)}</td>
+      <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(m.costUsd)}</strong></td>
+    </tr>\`).join('');
+    el.innerHTML = \`
+      <table>
+        <thead><tr>
+          <th>\${esc(t('th.model'))}</th>
+          <th class="num">\${esc(t('th.calls'))}</th>
+          <th class="num">\${esc(t('th.input'))}</th>
+          <th class="num">\${esc(t('th.output'))}</th>
+          <th class="num">\${esc(t('admin.stat.cacheRead'))}</th>
+          <th class="num">\${esc(t('admin.stat.cacheWrite'))}</th>
+          <th class="num">\${esc(t('th.cost'))}</th>
+        </tr></thead>
+        <tbody>\${rows}</tbody>
+      </table>\`;
+  };
+
   const renderCharts = (data) => {
     const series = range() === 'hour' ? data.hourSeries : data.minuteSeries;
     const unit = range() === 'hour' ? 'h' : 'm';
@@ -1276,6 +1409,8 @@ ${i18nHead()}
       renderTopStats(currentData);
       renderPeriods(currentData);
       renderCharts(currentData);
+      renderQuota(currentData);
+      renderSessionModels(currentData);
       renderModels(currentData);
       renderClients(currentData);
       renderRecent(currentData);
@@ -1741,6 +1876,7 @@ ${i18nHead()}
   // in sync. Uses IntersectionObserver — much cheaper than scroll listeners.
   const sectionToTitle = {
     'topStats': 'admin.nav.overview',
+    'quota': 'admin.nav.quota',
     'periods': 'admin.nav.periods',
     'charts-section': 'admin.nav.traffic',
     'models': 'admin.nav.models',
@@ -1759,7 +1895,7 @@ ${i18nHead()}
     const title = document.getElementById('pageTitle');
     if (title && sectionToTitle[id]) title.textContent = t(sectionToTitle[id]);
   };
-  const observed = ['topStats', 'periods', 'charts-section', 'models', 'clients', 'recent', 'install', 'about']
+  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'recent', 'install', 'about']
     .map(id => document.getElementById(id))
     .filter(Boolean);
   if ('IntersectionObserver' in window) {
@@ -1781,6 +1917,7 @@ ${i18nHead()}
   refresh();
   setInterval(refresh, 5000);
   setInterval(tickAgoCells, 15000);
+  setInterval(tickQuotaResets, 1000);
 })();
 </script>
 </body>

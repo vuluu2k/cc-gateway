@@ -14,6 +14,7 @@ import { getProxyAgent } from './proxy-agent.js'
 import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
+import { captureRateLimitHeaders } from './ratelimit.js'
 import { renderDashboard, renderLogin } from './dashboard.js'
 import { renderPortal, renderPortalLogin } from './portal.js'
 import { renderLanding } from './landing.js'
@@ -282,6 +283,11 @@ async function handleRequest(
     },
     (proxyRes) => {
       const status = proxyRes.statusCode || 502
+
+      // Snapshot the account-wide quota headers (anthropic-ratelimit-unified-*)
+      // Anthropic returns on every /v1/messages response — the dashboard surfaces
+      // 5h/weekly "session used %" and reset times from this. No-op when absent.
+      captureRateLimitHeaders(proxyRes.headers)
 
       // Surface upstream throttling distinctly from the gateway's own
       // cost-limit 429 (handled above). Anthropic returns 429 (rate_limit_error)

@@ -1,5 +1,6 @@
 import { getDb } from './db.js'
 import { stripSyntheticBlocks } from './preview.js'
+import { getRateLimitSnapshot } from './ratelimit.js'
 
 const MINUTE_MS = 60_000
 const HOUR_MS = 3_600_000
@@ -281,6 +282,47 @@ interface ClientRow {
   cost_usd: number
 }
 
+/**
+ * Per-model usage totals for requests since `sinceTs` — used to show which models
+ * were exercised within the current Claude session (5h) window, distinct from the
+ * lifetime "By model" table.
+ */
+export function getSessionModels(sinceTs: number) {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+        model,
+        COUNT(*) as total,
+        SUM(input_tokens) as input_tokens,
+        SUM(output_tokens) as output_tokens,
+        SUM(cache_read_tokens) as cache_read_tokens,
+        SUM(cache_creation_tokens) as cache_creation_tokens,
+        SUM(cost_usd) as cost_usd
+      FROM request_metrics
+      WHERE model != '' AND ts >= ?
+      GROUP BY model
+      ORDER BY cost_usd DESC`,
+    )
+    .all(sinceTs) as Array<{
+      model: string
+      total: number
+      input_tokens: number | null
+      output_tokens: number | null
+      cache_read_tokens: number | null
+      cache_creation_tokens: number | null
+      cost_usd: number | null
+    }>
+  return rows.map((r) => ({
+    model: r.model,
+    total: r.total,
+    inputTokens: r.input_tokens || 0,
+    outputTokens: r.output_tokens || 0,
+    cacheReadTokens: r.cache_read_tokens || 0,
+    cacheCreationTokens: r.cache_creation_tokens || 0,
+    costUsd: r.cost_usd || 0,
+  }))
+}
+
 export function getMetricsSnapshot() {
   const db = getDb()
   const now = Date.now()
@@ -517,6 +559,14 @@ export function getMetricsSnapshot() {
     }
   })
 
+  // Account-wide Claude subscription quota (5h + weekly) from the latest upstream
+  // response headers, plus the models exercised within the current 5h session
+  // window. sessionStart comes from the quota's 5h reset when available, else a
+  // plain "last 5 hours" fallback so the panel still works before any headers land.
+  const quota = getRateLimitSnapshot()
+  const sessionStart = quota?.sessionWindowStartMs ?? now - 5 * HOUR_MS
+  const sessionModels = getSessionModels(sessionStart)
+
   return {
     now,
     uptimeMs: now - startedAt,
@@ -527,5 +577,8 @@ export function getMetricsSnapshot() {
     minuteSeries,
     hourSeries,
     recent,
+    quota,
+    sessionStart,
+    sessionModels,
   }
 }
