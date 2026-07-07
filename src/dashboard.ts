@@ -992,9 +992,11 @@ ${i18nHead()}
     const d = resetMs - Date.now();
     if (d <= 0) return t('admin.quota.resetting');
     const s = Math.floor(d / 1000);
-    const h = Math.floor(s / 3600);
+    const days = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
+    if (days) return days + 'd ' + h + 'h ' + m + 'm';
     if (h) return h + 'h ' + m + 'm';
     if (m) return m + 'm ' + sec + 's';
     return sec + 's';
