@@ -15,6 +15,8 @@
     "add-user:dev": "tsx src/scripts/add-user.ts",
     "update-version": "node dist/scripts/update-version.js",
     "update-version:dev": "tsx src/scripts/update-version.ts",
+    "set-workdir": "node dist/scripts/set-workdir.js",
+    "set-workdir:dev": "tsx src/scripts/set-workdir.ts",
     "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts && tsx tests/ratelimit.test.ts"
   },
   "dependencies": {

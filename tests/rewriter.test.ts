@@ -606,5 +606,60 @@ test('#4 windows home masks username only, preserving drive + backslashes', () =
 })
 
 // ============================================================
+// Per-client home_dir override (cross-platform reverse mapping)
+// ============================================================
+
+// Env block whose "Working directory:" is ALREADY the canonical path — the
+// Case-B scenario where auto-detection finds no real home and yields [].
+const canonicalEnvBody = () =>
+  Buffer.from(JSON.stringify({ system: 'Working directory: /Users/jack/app', messages: [] }))
+
+test('override: without home_dir, canonical-only env yields no reverse (Case B)', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config)
+  assert.equal(pairs.length, 0)
+})
+
+test('override: POSIX home_dir reverses canonical → real even in Case B', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config, '/home/alice')
+  const r = createPathReplacer(pairs)
+  const out = r.push(Buffer.from('open /Users/jack/app/main.ts and cd /Users/jack')) + r.flush()
+  assert.equal(out, 'open /home/alice/app/main.ts and cd /home/alice')
+})
+
+test('override: macOS home_dir maps to /Users/<real>', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config, '/Users/bob')
+  const r = createPathReplacer(pairs)
+  const out = r.push(Buffer.from('/Users/jack/x')) + r.flush()
+  assert.equal(out, '/Users/bob/x')
+})
+
+test('override: Windows home_dir reverses the JSON-escaped wire form', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config, 'C:\\Users\\alice')
+  const r = createPathReplacer(pairs)
+  // On the SSE wire, backslashes are doubled: C:\\Users\\jack\\proj\\a.ts
+  const wire = 'run C:\\\\Users\\\\jack\\\\proj\\\\a.ts'
+  const out = r.push(Buffer.from(wire)) + r.flush()
+  assert.equal(out, 'run C:\\\\Users\\\\alice\\\\proj\\\\a.ts')
+})
+
+test('override: Windows bare home (end of JSON value) reverses too', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config, 'C:\\Users\\alice')
+  const r = createPathReplacer(pairs)
+  const wire = '"cwd":"C:\\\\Users\\\\jack"'
+  const out = r.push(Buffer.from(wire)) + r.flush()
+  assert.equal(out, '"cwd":"C:\\\\Users\\\\alice"')
+})
+
+test('override: Windows reverse survives a chunk split mid-path', () => {
+  const pairs = extractReversePathMap(canonicalEnvBody(), config, 'C:\\Users\\alice')
+  const r = createPathReplacer(pairs)
+  const wire = 'C:\\\\Users\\\\jack\\\\z'
+  let out = ''
+  for (const ch of wire) out += r.push(Buffer.from(ch))
+  out += r.flush()
+  assert.equal(out, 'C:\\\\Users\\\\alice\\\\z')
+})
+
+// ============================================================
 console.log(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exit(1)

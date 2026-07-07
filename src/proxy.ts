@@ -39,7 +39,7 @@ import {
   createInstallGrant,
   verifyInstallGrant,
 } from './session.js'
-import { addClient, listClients, removeClient, setClientLimit, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
+import { addClient, listClients, removeClient, setClientLimit, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
 
 /** Refresh in-memory token map from current config.yaml on disk. */
@@ -230,7 +230,7 @@ async function handleRequest(
   // file tool calls still hit real paths instead of the canonical /Users/jack.
   const reversePairs =
     body.length > 0 && pathname.startsWith('/v1/messages')
-      ? extractReversePathMap(body, config)
+      ? extractReversePathMap(body, config, tokenEntry.home_dir)
       : []
 
   // Rewrite identity fields in body
@@ -743,6 +743,7 @@ async function handleDashboardArea(
           cost_limit_usd: c.cost_limit_usd ?? null,
           cost_limit_period: c.cost_limit_period ?? null,
           cost_used_usd: c.cost_limit_usd ? Number(used.toFixed(4)) : null,
+          home_dir: c.home_dir ?? null,
         }
       })
       res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -940,7 +941,11 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Payload too large' }))
         return
       }
-      let payload: { cost_limit_usd?: number | null; cost_limit_period?: CostLimitPeriod | null }
+      let payload: {
+        cost_limit_usd?: number | null
+        cost_limit_period?: CostLimitPeriod | null
+        home_dir?: string | null
+      }
       try {
         payload = JSON.parse(body.toString('utf-8'))
       } catch {
@@ -948,24 +953,36 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Invalid JSON' }))
         return
       }
+      // Cost-limit and workdir edits arrive as independent PATCHes; apply whatever
+      // keys are present so one call can't clobber the other.
       let updated
       try {
-        updated = setClientLimit(name, {
-          cost_limit_usd: payload.cost_limit_usd ?? null,
-          cost_limit_period: payload.cost_limit_period ?? null,
-        })
+        if ('home_dir' in payload) {
+          updated = setClientHomeDir(name, payload.home_dir ?? null)
+        }
+        if ('cost_limit_usd' in payload || 'cost_limit_period' in payload) {
+          updated = setClientLimit(name, {
+            cost_limit_usd: payload.cost_limit_usd ?? null,
+            cost_limit_period: payload.cost_limit_period ?? null,
+          })
+        }
+        if (!updated) {
+          updated = listClients().find((c) => c.name === name)
+          if (!updated) throw new Error(`client "${name}" not found`)
+        }
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
       reloadAuthFromConfig()
-      log('info', `User "${session.u}" updated limit on client "${name}"`)
+      log('info', `User "${session.u}" updated client "${name}"`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         name: updated.name,
         cost_limit_usd: updated.cost_limit_usd ?? null,
         cost_limit_period: updated.cost_limit_period ?? null,
+        home_dir: updated.home_dir ?? null,
       }))
       return
     }
@@ -1141,7 +1158,7 @@ async function handlePortalArea(
       token: client.token,
       gateway_addr: typeof req.headers.host === 'string' ? req.headers.host : '',
       install_token: createInstallGrant(client.name),
-      profile: { display_name: profile.display_name, email: profile.email },
+      profile: { display_name: profile.display_name, email: profile.email, home_dir: client.home_dir ?? null },
       account: {
         created_at: credMeta?.created_at ?? null,
         password_updated_at: credMeta?.updated_at ?? null,
@@ -1177,7 +1194,7 @@ async function handlePortalArea(
       res.end(JSON.stringify({ error: 'Payload too large' }))
       return
     }
-    let payload: { display_name?: string; email?: string }
+    let payload: { display_name?: string; email?: string; home_dir?: string | null }
     try {
       payload = JSON.parse(body.toString('utf-8'))
     } catch {
@@ -1186,11 +1203,18 @@ async function handlePortalArea(
       return
     }
     let saved
+    let homeDir = client.home_dir ?? null
     try {
       saved = setClientProfile(client.name, {
         display_name: payload.display_name,
         email: payload.email,
       })
+      // Clients may self-set their real home dir so the gateway maps masked paths
+      // back to their machine. Same writer the admin uses.
+      if ('home_dir' in payload) {
+        homeDir = setClientHomeDir(client.name, payload.home_dir ?? null).home_dir ?? null
+        reloadAuthFromConfig()
+      }
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
@@ -1198,7 +1222,7 @@ async function handlePortalArea(
     }
     log('info', `Client "${client.name}" updated their profile`)
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ display_name: saved.display_name, email: saved.email }))
+    res.end(JSON.stringify({ display_name: saved.display_name, email: saved.email, home_dir: homeDir }))
     return
   }
 

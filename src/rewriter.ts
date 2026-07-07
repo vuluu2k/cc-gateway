@@ -337,7 +337,11 @@ function rewritePromptText(
  * masked. Returns [] when masking can't be reversed (no working_dir, no real
  * path found, or already identical) — the caller then streams through untouched.
  */
-export function extractReversePathMap(body: Buffer, config: Config): PathPair[] {
+export function extractReversePathMap(
+  body: Buffer,
+  config: Config,
+  clientHomeDir?: string,
+): PathPair[] {
   const pe = config.prompt_env
   if (!pe?.working_dir || pe.reverse_paths === false) return []
 
@@ -350,10 +354,16 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
   for (const n of ctx.nonHome) pairs.push({ from: n.canon, to: n.real })
 
   // Home prefix: covers ANY number of distinct projects/cwds under that home,
-  // since the username swap is structure-preserving. The bare-home pair (no
-  // trailing slash) reverses `cd $HOME` / `HOME=…` style refs; it is boundary-
-  // guarded so /Users/jack never matches inside /Users/jackson.
-  if (ctx.homeReal) {
+  // since the username swap is structure-preserving. Prefer an EXPLICIT per-client
+  // home (config auth.tokens[].home_dir) over env auto-detection — it's
+  // authoritative and works even when the request env line is missing or already
+  // carries the canonical path. Windows homes reverse too (see winReversePairs).
+  const explicit = clientHomeDir ? homeReversePairs(clientHomeDir, ctx.canonicalHome) : null
+  if (explicit && explicit.length) {
+    pairs.push(...explicit)
+  } else if (ctx.homeReal) {
+    // The bare-home pair (no trailing slash) reverses `cd $HOME` / `HOME=…` refs;
+    // it is boundary-guarded so /Users/mac never matches inside /Users/jackson.
     pairs.push({ from: ctx.canonicalHome, to: ctx.homeReal })
     pairs.push({
       from: ctx.canonicalHome.replace(/\/$/, ''),
@@ -366,6 +376,44 @@ export function extractReversePathMap(body: Buffer, config: Config): PathPair[] 
   // bare home prefix it contains (e.g. /Users/jack/projects before /Users/jack/).
   pairs.sort((a, b) => b.from.length - a.from.length)
   return pairs
+}
+
+/**
+ * Reverse pairs (canonical → real) for an explicit per-client home dir, native
+ * form autodetected:
+ *   POSIX  /Users/alice, /home/alice → maps canonicalHome back to it.
+ *   Windows C:\Users\alice          → maps C:\Users\<canonUser>\ back to it, in
+ *     the JSON-escaped form (\\) the model's response actually carries on the
+ *     wire, which is why the plain backslash form never matched before.
+ */
+function homeReversePairs(clientHomeDir: string, canonicalHome: string): PathPair[] {
+  const real = clientHomeDir.trim().replace(/[\\/]+$/, '')
+  if (!real) return []
+
+  // Windows: C:\Users\alice
+  if (/^[A-Za-z]:\\/.test(real)) {
+    const drive = real[0]
+    const canonUser = canonicalHome.replace(/^\/[^/]+\//, '').replace(/\/$/, '') // 'dev'
+    const canonWin = `${drive}:\\Users\\${canonUser}` // C:\Users\dev
+    // The SSE JSON response escapes every backslash, so a path on the wire looks
+    // like C:\\Users\\dev\\foo. Match/emit in that escaped form.
+    const esc = (s: string) => s.replace(/\\/g, '\\\\')
+    const sep = '\\\\' // one on-wire escaped separator (two chars: \ \)
+    return [
+      { from: esc(canonWin) + sep, to: esc(real) + sep },
+      { from: esc(canonWin), to: esc(real), boundary: true },
+    ]
+  }
+
+  // POSIX: /Users/alice or /home/alice (or any absolute path)
+  if (real.startsWith('/')) {
+    return [
+      { from: canonicalHome, to: real + '/' },
+      { from: canonicalHome.replace(/\/$/, ''), to: real, boundary: true },
+    ]
+  }
+
+  return []
 }
 
 /**

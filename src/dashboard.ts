@@ -813,6 +813,26 @@ ${i18nHead()}
   </div>
 </div>
 
+<div id="workdirModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <h3><span data-i18n="admin.modal.workdir.title">Set client workdir</span> · <span id="workdirName"></span></h3>
+    <p class="meta" style="margin:0 0 12px" data-i18n-html="admin.modal.workdir.note">This client's <strong>real home folder</strong>. The gateway maps the masked canonical path back to it in Claude's replies, so bash/file tool calls hit real paths. Leave empty to auto-detect from each request.</p>
+    <label data-i18n="admin.modal.workdir.label">Home directory</label>
+    <input id="wDir" placeholder="/Users/alice" data-i18n-ph="admin.modal.workdir.ph" autocomplete="off" spellcheck="false" />
+    <div class="cmd-table" style="margin-top:10px">
+      <code>macOS</code><span>/Users/&lt;name&gt;</span>
+      <code>Linux</code><span>/home/&lt;name&gt;</span>
+      <code>Windows</code><span>C:\\Users\\&lt;name&gt;</span>
+    </div>
+    <p class="meta" style="margin:8px 0 0;font-size:11px" data-i18n="admin.modal.workdir.hint">Tip: on the client machine run <code>echo $HOME</code> (macOS/Linux) or <code>echo %USERPROFILE%</code> (Windows) and paste the result.</p>
+    <div id="wError" class="error" style="display:none;margin-top:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button id="wCancel" type="button" data-i18n="common.cancel">Cancel</button>
+      <button id="wSubmit" type="button" class="primary" data-i18n="common.save">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="pwResetModal" class="modal" style="display:none">
   <div class="modal-box">
     <h3><span data-i18n="admin.modal.pwReset.title">Password reset</span> · <span id="pwResetName"></span></h3>
@@ -1481,7 +1501,11 @@ ${i18nHead()}
         <td data-label=""><strong>\${esc(c.name)}</strong></td>
         <td data-label="\${esc(t('th.token'))}"><code class="config-info">\${esc(c.token_preview)}</code></td>
         <td data-label="\${esc(t('th.costLimit'))}">\${renderLimitCell(c)}</td>
+        <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
+          ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
+          : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
         <td data-label="" style="text-align:right;white-space:nowrap">
+          <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>
           <button data-edit-limit="\${esc(c.name)}"
                   data-limit="\${c.cost_limit_usd || ''}"
                   data-period="\${esc(c.cost_limit_period || 'lifetime')}">\${esc(t('admin.client.setLimit'))}</button>
@@ -1492,9 +1516,14 @@ ${i18nHead()}
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
-        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.costLimit'))}</th><th></th></tr></thead>
+        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.costLimit'))}</th><th>\${esc(t('th.workdir'))}</th><th></th></tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
+    el.querySelectorAll('[data-edit-workdir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openWorkdirModal(btn.getAttribute('data-edit-workdir'), btn.getAttribute('data-workdir') || '');
+      });
+    });
     el.querySelectorAll('[data-del-client]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const name = btn.getAttribute('data-del-client');
@@ -1786,6 +1815,50 @@ ${i18nHead()}
   document.getElementById('lSubmit').addEventListener('click', submitLimit);
   document.getElementById('limitModal').addEventListener('click', (e) => {
     if (e.target.id === 'limitModal') closeLimitModal();
+  });
+
+  // ── Set-workdir modal ──
+  const showWorkdirError = (msg) => {
+    const el = document.getElementById('wError');
+    if (msg) { el.textContent = msg; el.style.display = 'block'; }
+    else { el.style.display = 'none'; }
+  };
+  const openWorkdirModal = (name, current) => {
+    document.getElementById('workdirName').textContent = name;
+    document.getElementById('workdirModal').setAttribute('data-name', name);
+    document.getElementById('wDir').value = current || '';
+    showWorkdirError(null);
+    document.getElementById('workdirModal').style.display = 'flex';
+    setTimeout(() => document.getElementById('wDir').focus(), 0);
+  };
+  const closeWorkdirModal = () => { document.getElementById('workdirModal').style.display = 'none'; };
+  const submitWorkdir = async () => {
+    const name = document.getElementById('workdirModal').getAttribute('data-name');
+    const home_dir = document.getElementById('wDir').value.trim();
+    const btn = document.getElementById('wSubmit');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/clients/' + encodeURIComponent(name), {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ home_dir: home_dir === '' ? null : home_dir }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showWorkdirError(err.error || t('admin.err.requestFailed', { status: res.status }));
+        return;
+      }
+      closeWorkdirModal();
+      loadClients();
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  document.getElementById('wCancel').addEventListener('click', closeWorkdirModal);
+  document.getElementById('wSubmit').addEventListener('click', submitWorkdir);
+  document.getElementById('workdirModal').addEventListener('click', (e) => {
+    if (e.target.id === 'workdirModal') closeWorkdirModal();
   });
 
   document.getElementById('addClientBtn').addEventListener('click', openModal);

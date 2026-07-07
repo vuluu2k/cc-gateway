@@ -143,6 +143,9 @@ const M: Record<string, Entry> = {
   'portal.profile.display': { en: 'Display name', vi: 'Tên hiển thị', zh: '显示名称' },
   'portal.profile.displayPh': { en: 'e.g. Alice Nguyen', vi: 'ví dụ: Alice Nguyen', zh: '例如 Alice Nguyen' },
   'portal.profile.email': { en: 'Email', vi: 'Email', zh: '邮箱' },
+  'portal.profile.workdir': { en: 'Your home folder', vi: 'Thư mục home của bạn', zh: '你的主目录' },
+  'portal.profile.workdirPh': { en: '/Users/alice', vi: '/Users/alice', zh: '/Users/alice' },
+  'portal.profile.workdirNote': { en: 'macOS <code>/Users/&lt;name&gt;</code> · Linux <code>/home/&lt;name&gt;</code> · Windows <code>C:\\Users\\&lt;name&gt;</code>. Run <code>echo $HOME</code> (or <code>echo %USERPROFILE%</code> on Windows) and paste it. Lets file/bash paths in Claude\'s replies point at your real machine. Leave empty to auto-detect.', vi: 'macOS <code>/Users/&lt;tên&gt;</code> · Linux <code>/home/&lt;tên&gt;</code> · Windows <code>C:\\Users\\&lt;tên&gt;</code>. Chạy <code>echo $HOME</code> (hoặc <code>echo %USERPROFILE%</code> trên Windows) rồi dán vào. Giúp path file/bash trong phản hồi của Claude trỏ đúng máy bạn. Để trống = tự phát hiện.', zh: 'macOS <code>/Users/&lt;名&gt;</code> · Linux <code>/home/&lt;名&gt;</code> · Windows <code>C:\\Users\\&lt;名&gt;</code>。运行 <code>echo $HOME</code>（Windows 用 <code>echo %USERPROFILE%</code>）并粘贴。让 Claude 回复中的文件/bash 路径指向你的真实机器。留空则自动检测。' },
   'portal.profile.save': { en: 'Save profile', vi: 'Lưu hồ sơ', zh: '保存资料' },
   'portal.profile.saved': { en: 'Profile saved.', vi: 'Đã lưu hồ sơ.', zh: '资料已保存。' },
   'portal.account.h': { en: 'Account', vi: 'Tài khoản', zh: '账户' },
@@ -303,6 +306,7 @@ const M: Record<string, Entry> = {
   'th.configuredClient': { en: 'Configured client', vi: 'Khách hàng đã cấu hình', zh: '已配置客户端' },
   'th.token': { en: 'Token', vi: 'Token', zh: '令牌' },
   'th.costLimit': { en: 'Cost limit', vi: 'Hạn mức chi phí', zh: '费用上限' },
+  'th.workdir': { en: 'Workdir', vi: 'Thư mục', zh: '工作目录' },
   // tooltips
   'admin.tip.inputTokens': { en: 'Input tokens', vi: 'Token đầu vào', zh: '输入令牌' },
   'admin.tip.outputTokens': { en: 'Output tokens', vi: 'Token đầu ra', zh: '输出令牌' },
@@ -335,6 +339,8 @@ const M: Record<string, Entry> = {
   'admin.client.unlimited': { en: 'unlimited', vi: 'không giới hạn', zh: '无限制' },
   'admin.client.windowTitle': { en: '{period} window', vi: 'kỳ {period}', zh: '{period} 窗口' },
   'admin.client.setLimit': { en: 'Set limit', vi: 'Đặt hạn mức', zh: '设置上限' },
+  'admin.client.setWorkdir': { en: 'Workdir', vi: 'Thư mục', zh: '工作目录' },
+  'admin.client.workdirAuto': { en: 'auto-detect', vi: 'tự phát hiện', zh: '自动检测' },
   'admin.client.redownload': { en: 'Re-download', vi: 'Tải lại', zh: '重新下载' },
   'admin.client.resetPw': { en: 'Reset password', vi: 'Đặt lại mật khẩu', zh: '重置密码' },
   'admin.client.delete': { en: 'Delete', vi: 'Xoá', zh: '删除' },
@@ -409,6 +415,11 @@ const M: Record<string, Entry> = {
   // set-limit modal
   'admin.modal.limit.title': { en: 'Set cost limit', vi: 'Đặt hạn mức chi phí', zh: '设置费用上限' },
   'admin.modal.limit.note': { en: 'Block this client from <code>/v1/messages</code> when the window\'s cost reaches the limit. Other endpoints (free) keep working.', vi: 'Chặn khách hàng này khỏi <code>/v1/messages</code> khi chi phí trong kỳ chạm hạn mức. Các endpoint khác (miễn phí) vẫn hoạt động.', zh: '当窗口内费用达到上限时，阻止该客户端访问 <code>/v1/messages</code>。其他（免费）端点继续可用。' },
+  'admin.modal.workdir.title': { en: 'Set client workdir', vi: 'Đặt thư mục client', zh: '设置客户端工作目录' },
+  'admin.modal.workdir.note': { en: "This client's <strong>real home folder</strong>. The gateway maps the masked canonical path back to it in Claude's replies, so bash/file tool calls hit real paths. Leave empty to auto-detect from each request.", vi: '<strong>Thư mục home thật</strong> của client này. Gateway sẽ map ngược đường dẫn canonical đã che về đúng path này trong phản hồi của Claude, để lệnh bash/file trỏ đúng path thật. Để trống = tự phát hiện từ mỗi request.', zh: '该客户端的<strong>真实主目录</strong>。网关会在 Claude 的回复中把被掩码的规范路径映射回它，使 bash/文件工具调用命中真实路径。留空则从每个请求自动检测。' },
+  'admin.modal.workdir.label': { en: 'Home directory', vi: 'Thư mục home', zh: '主目录' },
+  'admin.modal.workdir.ph': { en: '/Users/alice', vi: '/Users/alice', zh: '/Users/alice' },
+  'admin.modal.workdir.hint': { en: 'Tip: on the client machine run echo $HOME (macOS/Linux) or echo %USERPROFILE% (Windows) and paste the result.', vi: 'Mẹo: trên máy client chạy echo $HOME (macOS/Linux) hoặc echo %USERPROFILE% (Windows) rồi dán kết quả vào.', zh: '提示：在客户端机器上运行 echo $HOME（macOS/Linux）或 echo %USERPROFILE%（Windows），把结果粘贴进来。' },
   'admin.modal.limit.costLimit': { en: 'Cost limit (USD) — 0 / empty = unlimited', vi: 'Hạn mức chi phí (USD) — 0 / trống = không giới hạn', zh: '费用上限（USD）— 0 / 空 = 无限制' },
   // password reset modal
   'admin.modal.pwReset.title': { en: 'Password reset', vi: 'Đặt lại mật khẩu', zh: '密码重置' },

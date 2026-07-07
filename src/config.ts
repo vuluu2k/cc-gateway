@@ -11,6 +11,12 @@ export type TokenEntry = {
   cost_limit_usd?: number
   // Window the cap applies to. Defaults to 'lifetime'.
   cost_limit_period?: CostLimitPeriod
+  // This client's REAL home directory, in its native form:
+  //   macOS   /Users/alice        Linux  /home/alice        Windows  C:\Users\alice
+  // Used to reverse the canonical working_dir back to the client's real path in
+  // the model's response (so bash/file tool calls hit real paths) deterministically,
+  // instead of re-guessing it from each request's env block. Empty = auto-detect.
+  home_dir?: string
 }
 
 export type Config = {

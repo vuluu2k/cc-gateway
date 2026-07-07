@@ -9,6 +9,7 @@ export interface ClientEntry {
   token: string
   cost_limit_usd?: number
   cost_limit_period?: CostLimitPeriod
+  home_dir?: string
 }
 
 export interface ClientLimitInput {
@@ -18,6 +19,19 @@ export interface ClientLimitInput {
 
 const NAME_RE = /^[a-zA-Z0-9_.-]{1,64}$/
 const VALID_PERIODS: CostLimitPeriod[] = ['lifetime', 'monthly', 'daily']
+
+// A client's real home dir: POSIX absolute (/Users/alice, /home/alice, …) or a
+// Windows path (C:\Users\alice). Kept deliberately loose but anchored so a stray
+// value can't inject unrelated reverse pairs.
+const POSIX_HOME_RE = /^\/[^\s]{1,200}$/
+const WIN_HOME_RE = /^[A-Za-z]:\\[^\s]{1,200}$/
+
+export function normalizeHomeDir(raw: string): string | null {
+  const t = raw.trim().replace(/[\\/]+$/, '') // drop any trailing separator
+  if (!t) return null
+  if (POSIX_HOME_RE.test(t) || WIN_HOME_RE.test(t)) return t
+  return null
+}
 
 function configPath(): string {
   return resolve(
@@ -54,7 +68,34 @@ function readEntry(item: YAMLMap): ClientEntry | null {
     typeof periodRaw === 'string' && (VALID_PERIODS as string[]).includes(periodRaw)
       ? (periodRaw as CostLimitPeriod)
       : undefined
-  return { name, token, cost_limit_usd, cost_limit_period }
+  const homeRaw = item.get('home_dir')
+  const home_dir = typeof homeRaw === 'string' && homeRaw.trim() ? homeRaw.trim() : undefined
+  return { name, token, cost_limit_usd, cost_limit_period, home_dir }
+}
+
+/** Set or clear a client's real home dir. Pass null/'' to clear (→ auto-detect). */
+export function setClientHomeDir(name: string, homeDir: string | null): ClientEntry {
+  const path = configPath()
+  const doc = loadDoc(path)
+  const tokens = getTokensSeq(doc)
+  let target: YAMLMap | null = null
+  for (const item of tokens.items) {
+    if (item instanceof YAMLMap && item.get('name') === name) {
+      target = item
+      break
+    }
+  }
+  if (!target) throw new Error(`client "${name}" not found`)
+  const normalized = homeDir == null || homeDir.trim() === '' ? null : normalizeHomeDir(homeDir)
+  if (homeDir != null && homeDir.trim() !== '' && normalized === null) {
+    throw new Error('home_dir must be an absolute path (e.g. /Users/alice, /home/alice, or C:\\Users\\alice)')
+  }
+  if (normalized) target.set('home_dir', normalized)
+  else target.delete('home_dir')
+  writeFileSync(path, doc.toString(), 'utf-8')
+  const result = readEntry(target)
+  if (!result) throw new Error('failed to read updated entry')
+  return result
 }
 
 function applyLimitToYamlEntry(entry: YAMLMap, input: ClientLimitInput): void {

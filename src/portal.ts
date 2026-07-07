@@ -231,6 +231,9 @@ ${SHARED_HEAD_STYLE}
         <input class="text" id="pfDisplay" maxlength="64" data-i18n-ph="portal.profile.displayPh" style="margin-bottom:12px" />
         <label class="field" for="pfEmail" data-i18n="portal.profile.email">Email</label>
         <input class="text" id="pfEmail" maxlength="254" type="email" placeholder="you@example.com" style="margin-bottom:14px" />
+        <label class="field" for="pfWorkdir" data-i18n="portal.profile.workdir">Your home folder</label>
+        <input class="text" id="pfWorkdir" maxlength="220" spellcheck="false" placeholder="/Users/alice" data-i18n-ph="portal.profile.workdirPh" style="margin-bottom:6px" />
+        <p class="muted" style="margin:0 0 14px;font-size:11px" data-i18n-html="portal.profile.workdirNote">macOS <code>/Users/&lt;name&gt;</code> · Linux <code>/home/&lt;name&gt;</code> · Windows <code>C:\\Users\\&lt;name&gt;</code>. Run <code>echo $HOME</code> (or <code>echo %USERPROFILE%</code> on Windows) and paste it. Lets file/bash paths in Claude's replies point at your real machine. Leave empty to auto-detect.</p>
         <button id="pfSave" class="primary" type="button" data-i18n="portal.profile.save">Save profile</button>
       </div>
       <div class="card">
@@ -453,6 +456,7 @@ ${SHARED_HEAD_STYLE}
     if (firstRender) {
       document.getElementById('pfDisplay').value = (d.profile && d.profile.display_name) || '';
       document.getElementById('pfEmail').value = (d.profile && d.profile.email) || '';
+      document.getElementById('pfWorkdir').value = (d.profile && d.profile.home_dir) || '';
     }
 
     // Periods
@@ -593,6 +597,7 @@ ${SHARED_HEAD_STYLE}
         body: JSON.stringify({
           display_name: document.getElementById('pfDisplay').value,
           email: document.getElementById('pfEmail').value,
+          home_dir: document.getElementById('pfWorkdir').value.trim() || null,
         }),
       });
       if (res.ok) {
