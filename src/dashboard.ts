@@ -380,8 +380,8 @@ ${i18nHead()}
   .quota-win .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   .quota-win .name { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
   .quota-win .name .rep { margin-left: 6px; color: var(--accent); font-size: 10px; }
-  .quota-win .pct { font-family: var(--mono); font-size: 24px; font-weight: 600; line-height: 1; }
-  .quota-win .pct .unit { font-size: 13px; color: var(--muted); }
+  .quota-win .pct { font-family: var(--mono); font-size: 24px; font-weight: 600; line-height: 1; margin-bottom: 10px; }
+  .quota-win .pct .unit { font-size: 13px; color: var(--muted); margin-left: 5px; }
   .quota-bar { height: 8px; background: var(--bg); border-radius: 5px; overflow: hidden; }
   .quota-bar > span { display: block; height: 100%; background: var(--ok); transition: width .4s ease; }
   .quota-bar > span.warn { background: var(--warn); }
