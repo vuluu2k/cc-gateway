@@ -536,6 +536,32 @@ if t not in a:
   return 0
 }
 
+# Reverse of approve_token: drop this token from ~/.claude.json approvals so
+# uninstall leaves no trace of the gateway key behind.
+revoke_token() {
+  CLAUDE_JSON="$HOME/.claude.json"
+  [[ -f "$CLAUDE_JSON" ]] || return 0
+  KEY_TAIL="\${CLIENT_TOKEN: -20}"
+  [[ \${#CLIENT_TOKEN} -lt 20 ]] && return 0
+  if command -v node >/dev/null 2>&1; then
+    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j=null;try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(j&&typeof j==="object"){const r=j.customApiKeyResponses;if(r&&Array.isArray(r.approved)){const i=r.approved.indexOf(t);if(i>=0){r.approved.splice(i,1);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}}}' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+p,t=sys.argv[1],sys.argv[2]
+try:
+    j=json.load(open(p))
+except Exception:
+    sys.exit(0)
+r=j.get("customApiKeyResponses") if isinstance(j,dict) else None
+a=r.get("approved") if isinstance(r,dict) else None
+if isinstance(a,list) and t in a:
+    a.remove(t)
+    open(p,"w").write(json.dumps(j,indent=2)+"\\n")' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null
+  fi
+  return 0
+}
+
 # ── Subcommands ──
 
 case "$1" in
@@ -579,7 +605,25 @@ case "$1" in
     ;;
 
   uninstall)
-    rm "$INSTALL_PATH" 2>/dev/null || sudo rm "$INSTALL_PATH"
+    # Remove every ccg copy: install may have written to more than one dir,
+    # and the quick installer targets ~/.local/bin while INSTALL_PATH here can
+    # resolve to /opt/homebrew/bin. Mirror the install loop so uninstall is its
+    # exact inverse regardless of platform or PATH order.
+    for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+      TARGET="$d/ccg"
+      if [[ -f "$TARGET" ]]; then
+        if rm -f "$TARGET" 2>/dev/null || sudo rm -f "$TARGET"; then
+          echo "Removed $TARGET"
+        else
+          echo "Warning: could not remove $TARGET — try: sudo rm $TARGET"
+        fi
+      fi
+    done
+    # Also delete the launcher we were invoked from if it lives elsewhere
+    # (e.g. a downloaded cc-*.sh that was never 'install'ed).
+    if [[ -f "$SELF_PATH" && "$SELF_PATH" != */ccg ]]; then
+      rm -f "$SELF_PATH" 2>/dev/null && echo "Removed $SELF_PATH"
+    fi
     if grep -q "$ALIAS_TAG" "$RC_FILE" 2>/dev/null; then
       sed -i.bak "/$ALIAS_TAG/d" "$RC_FILE"
       rm -f "\${RC_FILE}.bak"
@@ -599,7 +643,12 @@ case "$1" in
         rm -f "\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf"
         ;;
     esac
-    echo "Removed. Native 'claude' restored."
+    # Reverse the token approval that install / hijack-gui wrote.
+    revoke_token
+    echo "Removed 'ccg' and cleaned up. Native 'claude' restored."
+    echo "Note: terminals or editors already open may still hold the old"
+    echo "  ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL — reopen them (or run"
+    echo "  'unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL') to fully detach."
     exit 0
     ;;
 
