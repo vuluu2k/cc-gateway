@@ -26,6 +26,18 @@ export interface ParsedUsage {
   outputTokens: number
   cacheReadTokens: number
   cacheCreationTokens: number
+  /**
+   * TTL split of cacheCreationTokens, from `usage.cache_creation`. The two sum
+   * to cacheCreationTokens. Left `undefined` — not zero — when the response
+   * omits the breakdown, so pricing can tell "no 1h writes" apart from
+   * "unknown" and fall back to charging the whole figure at the 5m rate.
+   */
+  cacheCreation5mTokens?: number
+  cacheCreation1hTokens?: number
+  /** `usage.speed` — 'fast' bills at premium rates. Absent → standard. */
+  speed: 'standard' | 'fast' | ''
+  /** `usage.inference_geo` — 'us' carries a 1.1x price multiplier. */
+  inferenceGeo: string
 }
 
 export class SSEUsageParser {
@@ -35,6 +47,10 @@ export class SSEUsageParser {
   private outputTokens = 0
   private cacheReadTokens = 0
   private cacheCreationTokens = 0
+  private cacheCreation5mTokens: number | undefined
+  private cacheCreation1hTokens: number | undefined
+  private speed: 'standard' | 'fast' | '' = ''
+  private inferenceGeo = ''
   private isStreaming = false
 
   feed(chunk: Buffer | string): void {
@@ -78,6 +94,10 @@ export class SSEUsageParser {
       outputTokens: this.outputTokens,
       cacheReadTokens: this.cacheReadTokens,
       cacheCreationTokens: this.cacheCreationTokens,
+      cacheCreation5mTokens: this.cacheCreation5mTokens,
+      cacheCreation1hTokens: this.cacheCreation1hTokens,
+      speed: this.speed,
+      inferenceGeo: this.inferenceGeo,
     }
   }
 
@@ -145,5 +165,20 @@ export class SSEUsageParser {
       this.cacheReadTokens = Math.max(this.cacheReadTokens, u.cache_read_input_tokens)
     if (typeof u.cache_creation_input_tokens === 'number')
       this.cacheCreationTokens = Math.max(this.cacheCreationTokens, u.cache_creation_input_tokens)
+
+    // Per-TTL breakdown of the cache write. Priced differently: 5m writes are
+    // 1.25x base input, 1h writes are 2x.
+    const cc = u.cache_creation
+    if (cc && typeof cc === 'object') {
+      if (typeof cc.ephemeral_5m_input_tokens === 'number')
+        this.cacheCreation5mTokens = Math.max(this.cacheCreation5mTokens ?? 0, cc.ephemeral_5m_input_tokens)
+      if (typeof cc.ephemeral_1h_input_tokens === 'number')
+        this.cacheCreation1hTokens = Math.max(this.cacheCreation1hTokens ?? 0, cc.ephemeral_1h_input_tokens)
+    }
+
+    // Pricing modifiers. Both are stable for a given request, so first
+    // non-empty value wins — no need to reconcile across message_delta.
+    if (u.speed === 'fast' || u.speed === 'standard') this.speed = u.speed
+    if (typeof u.inference_geo === 'string' && u.inference_geo) this.inferenceGeo = u.inference_geo
   }
 }

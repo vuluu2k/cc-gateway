@@ -17,7 +17,7 @@
     "update-version:dev": "tsx src/scripts/update-version.ts",
     "set-workdir": "node dist/scripts/set-workdir.js",
     "set-workdir:dev": "tsx src/scripts/set-workdir.ts",
-    "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts && tsx tests/ratelimit.test.ts"
+    "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts && tsx tests/ratelimit.test.ts && tsx tests/pricing.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

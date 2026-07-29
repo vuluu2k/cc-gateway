@@ -349,7 +349,7 @@ async function handleRequest(
         finalized = true
         const usage = parser?.result()
         const cost = usage && usage.model
-          ? computeCost(usage.model, usage)
+          ? computeCost(usage.model, usage, startedAt)
           : 0
         recordRequest({
           ts: startedAt,
