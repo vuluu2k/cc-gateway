@@ -283,8 +283,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ccg.ps1" %*
 }
 
 function Test-GuiHijack {
+  # Either var counts as "still hijacked" - a half-cleared state (one var unset
+  # by hand) must not read as clean, or release-gui would refuse to finish the job.
   $url = [Environment]::GetEnvironmentVariable("ANTHROPIC_BASE_URL", "User")
-  return (-not [string]::IsNullOrEmpty($url))
+  $key = [Environment]::GetEnvironmentVariable("ANTHROPIC_API_KEY", "User")
+  return ((-not [string]::IsNullOrEmpty($url)) -or (-not [string]::IsNullOrEmpty($key)))
 }
 
 # Pre-approve this token in ~/.claude.json so Claude Code never shows the
@@ -298,7 +301,20 @@ function Approve-Token {
   $cj = Join-Path $env:USERPROFILE ".claude.json"
   if ($ClientToken.Length -lt 20) { return }
   $tail = $ClientToken.Substring($ClientToken.Length - 20)
-  $js = 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];if(!a.includes(t)){a.push(t);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}'
+  $js = 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];const d=r.rejected=Array.isArray(r.rejected)?r.rejected:[];let ch=false;if(!a.includes(t)){a.push(t);ch=true}for(let i=d.length-1;i>=0;i--){if(d[i]===t){d.splice(i,1);ch=true}}if(ch)fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")'
+  try { & $node.Source -e $js $cj $tail 2>$null | Out-Null } catch {}
+}
+
+# Reverse of Approve-Token. Clears both lists so uninstall leaves ~/.claude.json
+# as it was before ccg touched it.
+function Revoke-Token {
+  $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $node) { return }
+  $cj = Join-Path $env:USERPROFILE ".claude.json"
+  if (-not (Test-Path $cj)) { return }
+  if ($ClientToken.Length -lt 20) { return }
+  $tail = $ClientToken.Substring($ClientToken.Length - 20)
+  $js = 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j=null;try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(j&&typeof j==="object"){const r=j.customApiKeyResponses;let ch=false;if(r&&typeof r==="object"){for(const k of["approved","rejected"]){const l=r[k];if(!Array.isArray(l))continue;for(let i=l.length-1;i>=0;i--){if(l[i]===t){l.splice(i,1);ch=true}}}}if(ch)fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}'
   try { & $node.Source -e $js $cj $tail 2>$null | Out-Null } catch {}
 }
 
@@ -325,11 +341,15 @@ function Invoke-Uninstall {
   Remove-Item -Path $InstallPs1 -ErrorAction SilentlyContinue
   Remove-Item -Path $InstallCmd -ErrorAction SilentlyContinue
   if (Test-AliasInProfile) { Remove-AliasFromProfile }
-  if (Test-GuiHijack) {
-    [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $null, "User")
-    [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $null, "User")
-  }
+  # Unconditional, and not gated on Test-GuiHijack: clearing a var that is
+  # already unset is a no-op, whereas skipping leaves a half-cleared HKCU
+  # Environment behind that every new GUI app keeps inheriting.
+  [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", $null, "User")
+  [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $null, "User")
+  Revoke-Token
   Write-Host "Removed. Native 'claude' restored."
+  Write-Host "Note: apps already open may still hold the old ANTHROPIC_API_KEY /"
+  Write-Host "  ANTHROPIC_BASE_URL - reopen them to fully detach."
 }
 
 function Invoke-Hijack {
@@ -513,7 +533,7 @@ approve_token() {
   KEY_TAIL="\${CLIENT_TOKEN: -20}"
   [[ \${#CLIENT_TOKEN} -lt 20 ]] && return 0
   if command -v node >/dev/null 2>&1; then
-    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];if(!a.includes(t)){a.push(t);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
+    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j={};try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(typeof j!=="object"||j===null||Array.isArray(j))j={};const r=j.customApiKeyResponses=j.customApiKeyResponses||{};const a=r.approved=Array.isArray(r.approved)?r.approved:[];const d=r.rejected=Array.isArray(r.rejected)?r.rejected:[];let ch=false;if(!a.includes(t)){a.push(t);ch=true}for(let i=d.length-1;i>=0;i--){if(d[i]===t){d.splice(i,1);ch=true}}if(ch)fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
@@ -529,22 +549,31 @@ if not isinstance(r,dict):
 a=r.setdefault("approved",[])
 if not isinstance(a,list):
     a=[]; r["approved"]=a
+d=r.setdefault("rejected",[])
+if not isinstance(d,list):
+    d=[]; r["rejected"]=d
+ch=False
 if t not in a:
-    a.append(t)
+    a.append(t); ch=True
+while t in d:
+    d.remove(t); ch=True
+if ch:
     open(p,"w").write(json.dumps(j,indent=2)+"\\n")' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null
   fi
   return 0
 }
 
-# Reverse of approve_token: drop this token from ~/.claude.json approvals so
-# uninstall leaves no trace of the gateway key behind.
+# Reverse of approve_token: drop this token from ~/.claude.json so uninstall
+# leaves no trace of the gateway key behind. Clears BOTH lists — a token the
+# user once declined sits in "rejected" forever otherwise, and a later reinstall
+# would land the same tail in both lists at once.
 revoke_token() {
   CLAUDE_JSON="$HOME/.claude.json"
   [[ -f "$CLAUDE_JSON" ]] || return 0
   KEY_TAIL="\${CLIENT_TOKEN: -20}"
   [[ \${#CLIENT_TOKEN} -lt 20 ]] && return 0
   if command -v node >/dev/null 2>&1; then
-    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j=null;try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(j&&typeof j==="object"){const r=j.customApiKeyResponses;if(r&&Array.isArray(r.approved)){const i=r.approved.indexOf(t);if(i>=0){r.approved.splice(i,1);fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}}}' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
+    node -e 'const fs=require("fs");const[p,t]=process.argv.slice(1);let j=null;try{j=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};if(j&&typeof j==="object"){const r=j.customApiKeyResponses;let ch=false;if(r&&typeof r==="object"){for(const k of["approved","rejected"]){const l=r[k];if(!Array.isArray(l))continue;for(let i=l.length-1;i>=0;i--){if(l[i]===t){l.splice(i,1);ch=true}}}}if(ch)fs.writeFileSync(p,JSON.stringify(j,null,2)+"\\n")}' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null && return 0
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
@@ -554,9 +583,14 @@ try:
 except Exception:
     sys.exit(0)
 r=j.get("customApiKeyResponses") if isinstance(j,dict) else None
-a=r.get("approved") if isinstance(r,dict) else None
-if isinstance(a,list) and t in a:
-    a.remove(t)
+if not isinstance(r,dict): sys.exit(0)
+ch=False
+for k in ("approved","rejected"):
+    l=r.get(k)
+    if isinstance(l,list):
+        while t in l:
+            l.remove(t); ch=True
+if ch:
     open(p,"w").write(json.dumps(j,indent=2)+"\\n")' "$CLAUDE_JSON" "$KEY_TAIL" 2>/dev/null
   fi
   return 0
@@ -635,9 +669,14 @@ case "$1" in
         if [[ -f "$PLIST_PATH" ]]; then
           launchctl unload "$PLIST_PATH" 2>/dev/null
           rm -f "$PLIST_PATH"
-          launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
-          launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
         fi
+        # Unconditional: 'launchctl setenv' values live in the user's launchd
+        # session, not in the plist. If the plist was already gone (release-gui
+        # ran first, or it was deleted by hand) the vars would otherwise stay
+        # set for every GUI app until the next logout. Same reasoning as
+        # release-gui, which has always unset these unconditionally.
+        launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
+        launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
         ;;
       Linux)
         rm -f "\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf"
