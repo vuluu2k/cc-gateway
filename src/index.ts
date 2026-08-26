@@ -61,8 +61,16 @@ try {
     log('warn', 'No dashboard users yet. Create one with: npm run add-user <username>')
   }
 
-  // Initialize OAuth — uses existing access token if valid, only refreshes when expired
-  await initOAuth(config.oauth)
+  // Initialize OAuth — uses existing access token if valid, only refreshes when
+  // expired. A dead refresh_token must NOT abort startup: the admin needs the
+  // dashboard up in order to re-login, and /v1/* already answers 503 while the
+  // gateway has no usable token.
+  const oauthReady = await initOAuth(config.oauth)
+  if (!oauthReady) {
+    log('warn', 'Starting in degraded mode: no valid OAuth token.')
+    log('warn', '  Proxy requests will return 503 until you re-authenticate.')
+    log('warn', '  Open the admin dashboard and use "Re-login with Claude".')
+  }
 
   startProxy(config)
 

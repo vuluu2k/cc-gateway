@@ -6,7 +6,13 @@ import { URL } from 'url'
 import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, initAuth, setAuthTokens } from './auth.js'
-import { getAccessToken } from './oauth.js'
+import {
+  getAccessToken,
+  getOAuthStatus,
+  beginOAuthLogin,
+  completeOAuthLogin,
+  cancelOAuthLogin,
+} from './oauth.js'
 import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from './rewriter.js'
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
@@ -96,11 +102,14 @@ async function handleRequest(
   // Health check - no auth required
   if (pathname === '/_health') {
     const oauthOk = !!getAccessToken()
+    const oauthStatus = getOAuthStatus()
     const status = oauthOk ? 200 : 503
     res.writeHead(status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       status: oauthOk ? 'ok' : 'degraded',
       oauth: oauthOk ? 'valid' : 'expired/refreshing',
+      oauth_state: oauthStatus.state,
+      oauth_error: oauthStatus.last_error,
       canonical_device: config.identity.device_id.slice(0, 8) + '...',
       canonical_platform: config.env.platform,
       upstream: config.upstream.url,
@@ -120,7 +129,9 @@ async function handleRequest(
     pathname === '/dashboard' ||
     pathname === '/_metrics' ||
     pathname === '/api/clients' ||
-    pathname.startsWith('/api/clients/')
+    pathname.startsWith('/api/clients/') ||
+    pathname === '/api/oauth' ||
+    pathname.startsWith('/api/oauth/')
   ) {
     await handleDashboardArea(req, res, pathname, method)
     return
@@ -728,7 +739,89 @@ async function handleDashboardArea(
 
   if (pathname === '/_metrics') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify(getMetricsSnapshot()))
+    res.end(JSON.stringify({ ...getMetricsSnapshot(), oauth: getOAuthStatus() }))
+    return
+  }
+
+  // ── OAuth re-login (authorization code + PKCE, manual paste flow) ──
+  // Lets an admin re-authenticate the gateway's upstream Claude account from
+  // the browser when the refresh_token dies, instead of editing config.yaml
+  // and restarting the container.
+  if (pathname === '/api/oauth') {
+    if (method !== 'GET') {
+      res.writeHead(405, { Allow: 'GET' })
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify(getOAuthStatus()))
+    return
+  }
+
+  if (pathname === '/api/oauth/login') {
+    if (method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST' })
+      res.end()
+      return
+    }
+    const started = beginOAuthLogin()
+    log('info', `User "${session.u}" started an OAuth re-login`)
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify(started))
+    return
+  }
+
+  if (pathname === '/api/oauth/complete') {
+    if (method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST' })
+      res.end()
+      return
+    }
+    let body: Buffer
+    try {
+      body = await readBody(req)
+    } catch {
+      res.writeHead(413, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Payload too large' }))
+      return
+    }
+    let code = ''
+    try {
+      const parsed = JSON.parse(body.toString('utf-8'))
+      code = typeof parsed?.code === 'string' ? parsed.code : ''
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON body' }))
+      return
+    }
+    if (!code.trim()) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Authorization code is required' }))
+      return
+    }
+    try {
+      const result = await completeOAuthLogin(code)
+      log('info', `User "${session.u}" completed an OAuth re-login`)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, ...result, status: getOAuthStatus() }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log('warn', `OAuth re-login by "${session.u}" failed: ${message}`)
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: message }))
+    }
+    return
+  }
+
+  if (pathname === '/api/oauth/cancel') {
+    if (method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST' })
+      res.end()
+      return
+    }
+    cancelOAuthLogin()
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
     return
   }
 

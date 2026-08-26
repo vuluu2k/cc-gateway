@@ -504,6 +504,10 @@ ${i18nHead()}
 </header>
 <main>
   <div class="grid">
+    <div id="oauthBanner" class="error" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+      <span id="oauthBannerMsg" style="flex:1;min-width:240px"></span>
+      <button id="oauthBannerBtn" type="button" class="primary" data-i18n="admin.oauth.reloginBtn">Re-login with Claude</button>
+    </div>
     <div class="row" id="topStats"></div>
     <section id="quota" class="card">
       <h2 data-i18n="admin.sec.quota">Session quota · Anthropic account</h2>
@@ -654,6 +658,31 @@ ${i18nHead()}
     </details>
   </div>
 </main>
+</div>
+
+<div id="oauthModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <h3 data-i18n="admin.modal.oauth.title">Re-login with Claude</h3>
+    <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.oauth.note">Re-authenticates the gateway's shared Claude account.</p>
+
+    <label data-i18n="admin.modal.oauth.step1">1. Open the Claude sign-in page</label>
+    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n="admin.modal.oauth.step1note">Sign in with the account this gateway proxies, then approve access.</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="oaLink" type="button" data-i18n="admin.modal.oauth.openLink">Generate sign-in link</button>
+      <a id="oaOpen" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:var(--accent);font-size:13px" data-i18n="admin.modal.oauth.openTab">Open sign-in page ↗</a>
+    </div>
+
+    <label style="margin-top:16px" data-i18n="admin.modal.oauth.step2">2. Paste the authorization code</label>
+    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n-html="admin.modal.oauth.step2note">Claude shows a code after you approve.</p>
+    <input id="oaCode" placeholder="Paste the code from Claude" data-i18n-ph="admin.modal.oauth.codePh" autocomplete="off" spellcheck="false" />
+
+    <div id="oaError" class="error" style="display:none;margin-top:12px"></div>
+    <div id="oaOk" class="meta" style="display:none;margin-top:12px;color:var(--ok)"></div>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button id="oaCancel" type="button" data-i18n="common.cancel">Cancel</button>
+      <button id="oaSubmit" type="button" class="primary" data-i18n="admin.modal.oauth.submit">Finish sign-in</button>
+    </div>
+  </div>
 </div>
 
 <div id="addClientModal" class="modal" style="display:none">
@@ -1428,6 +1457,7 @@ ${i18nHead()}
         return;
       }
       currentData = await res.json();
+      renderOAuthBanner(currentData.oauth);
       renderTopStats(currentData);
       renderPeriods(currentData);
       renderCharts(currentData);
@@ -1441,6 +1471,114 @@ ${i18nHead()}
       document.getElementById('updated').textContent = t('admin.toolbar.fetchErr');
     }
   };
+
+  // ── OAuth account health + re-login ──
+  // The gateway proxies one shared Claude account. When its refresh_token dies
+  // every /v1/* call 503s, so surface that here with a one-click recovery
+  // instead of making the admin edit config.yaml and restart the container.
+  const renderOAuthBanner = (oauth) => {
+    const banner = document.getElementById('oauthBanner');
+    if (!oauth || oauth.state === 'ok' || oauth.state === 'uninitialized') {
+      banner.style.display = 'none';
+      return;
+    }
+    const msgKey = oauth.state === 'expired'
+      ? 'admin.oauth.bannerExpired'
+      : 'admin.oauth.bannerRefreshing';
+    let msg = t(msgKey);
+    if (oauth.last_error) msg += ' ' + t('admin.oauth.detail', { error: oauth.last_error });
+    document.getElementById('oauthBannerMsg').textContent = msg;
+    banner.style.display = 'flex';
+  };
+
+  const showOaError = (msg) => {
+    const el = document.getElementById('oaError');
+    if (msg) { el.textContent = msg; el.style.display = 'block'; }
+    else { el.style.display = 'none'; }
+  };
+  const showOaOk = (msg) => {
+    const el = document.getElementById('oaOk');
+    if (msg) { el.textContent = msg; el.style.display = 'block'; }
+    else { el.style.display = 'none'; }
+  };
+  let oaLinkReady = false;
+  const openOauthModal = () => {
+    oaLinkReady = false;
+    document.getElementById('oaCode').value = '';
+    document.getElementById('oaOpen').style.display = 'none';
+    showOaError(null);
+    showOaOk(null);
+    document.getElementById('oauthModal').style.display = 'flex';
+  };
+  const closeOauthModal = () => {
+    document.getElementById('oauthModal').style.display = 'none';
+  };
+  const startOauthLogin = async () => {
+    const btn = document.getElementById('oaLink');
+    btn.disabled = true;
+    showOaError(null);
+    showOaOk(null);
+    try {
+      const res = await fetch('/api/oauth/login', { method: 'POST', credentials: 'same-origin' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showOaError(t('admin.modal.oauth.linkErr', { error: err.error || res.status }));
+        return;
+      }
+      const data = await res.json();
+      const link = document.getElementById('oaOpen');
+      link.href = data.url;
+      link.style.display = 'inline';
+      oaLinkReady = true;
+      window.open(data.url, '_blank', 'noopener');
+      document.getElementById('oaCode').focus();
+    } catch (e) {
+      showOaError(t('admin.alert.networkErr'));
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  const submitOauthCode = async () => {
+    if (!oaLinkReady) { showOaError(t('admin.modal.oauth.needLink')); return; }
+    const code = document.getElementById('oaCode').value.trim();
+    if (!code) { showOaError(t('admin.modal.oauth.needCode')); return; }
+    const btn = document.getElementById('oaSubmit');
+    btn.disabled = true;
+    showOaError(null);
+    showOaOk(t('admin.modal.oauth.working'));
+    try {
+      const res = await fetch('/api/oauth/complete', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showOaOk(null);
+        showOaError(t('admin.alert.failed', { error: data.error || res.status }));
+        return;
+      }
+      showOaOk(t('admin.modal.oauth.ok', { time: new Date(data.expires_at).toLocaleTimeString() }));
+      renderOAuthBanner(data.status);
+      setTimeout(() => { closeOauthModal(); refresh(); }, 1200);
+    } catch (e) {
+      showOaOk(null);
+      showOaError(t('admin.alert.networkErr'));
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  document.getElementById('oauthBannerBtn').addEventListener('click', openOauthModal);
+  document.getElementById('oaLink').addEventListener('click', startOauthLogin);
+  document.getElementById('oaSubmit').addEventListener('click', submitOauthCode);
+  document.getElementById('oaCancel').addEventListener('click', closeOauthModal);
+  document.getElementById('oauthModal').addEventListener('click', (e) => {
+    if (e.target.id === 'oauthModal') closeOauthModal();
+  });
+  document.getElementById('oaCode').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitOauthCode();
+  });
 
   document.getElementById('refreshBtn').addEventListener('click', refresh);
   document.getElementById('rangeSel').addEventListener('change', () => {
