@@ -87,106 +87,169 @@ function makeLiveAccount(id: string) {
   })
 }
 
+function makeExpiredAccount(id: string) {
+  createAccount({ id })
+  updateAccountRow(id, {
+    accessToken: '',
+    refreshToken: `refresh-${id}`,
+    expiresAt: 0,
+    state: 'expired',
+  })
+}
+
+function makeDisabledAccount(id: string) {
+  makeLiveAccount(id)
+  updateAccountRow(id, { enabled: false })
+}
+
 _resetAccountsRuntime()
-makeLiveAccount('acc-a')
-makeLiveAccount('acc-b')
-makeLiveAccount('acc-c')
-insertClientRow({ name: 'carol', token: 'tok-carol' })
+
+// Every test below owns its own client name, its own accounts, its own
+// bindings and its own spend — no test may rely on a row an earlier test
+// created. That is what makes each one correct in isolation, not just when
+// run in this file's declared order.
 
 test('chọn account có priority nhỏ nhất', () => {
-  replaceBindings('carol', [
-    { accountId: 'acc-b', priority: 9, limitUsd: 0, limitPeriod: 'lifetime' },
-    { accountId: 'acc-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+  makeLiveAccount('sel-priority-a')
+  makeLiveAccount('sel-priority-b')
+  insertClientRow({ name: 'sel-priority-client', token: 'tok-sel-priority' })
+  replaceBindings('sel-priority-client', [
+    { accountId: 'sel-priority-b', priority: 9, limitUsd: 0, limitPeriod: 'lifetime' },
+    { accountId: 'sel-priority-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
   ])
-  const r = selectAccountFor('carol', true)
+  const r = selectAccountFor('sel-priority-client', true)
   assert.equal(r.ok, true)
-  assert.equal(r.ok && r.accountId, 'acc-a')
-  assert.equal(r.ok && r.accessToken, 'token-acc-a')
+  assert.equal(r.ok && r.accountId, 'sel-priority-a')
+  assert.equal(r.ok && r.accessToken, 'token-sel-priority-a')
 })
 
 test('hết hạn mức thì tràn xuống account kế tiếp', () => {
-  replaceBindings('carol', [
-    { accountId: 'acc-a', priority: 1, limitUsd: 10, limitPeriod: 'lifetime' },
-    { accountId: 'acc-b', priority: 2, limitUsd: 5, limitPeriod: 'lifetime' },
+  makeLiveAccount('sel-fallback-a')
+  makeLiveAccount('sel-fallback-b')
+  insertClientRow({ name: 'sel-fallback-client', token: 'tok-sel-fallback' })
+  replaceBindings('sel-fallback-client', [
+    { accountId: 'sel-fallback-a', priority: 1, limitUsd: 10, limitPeriod: 'lifetime' },
+    { accountId: 'sel-fallback-b', priority: 2, limitUsd: 5, limitPeriod: 'lifetime' },
   ])
-  spend('carol', 'acc-a', 10)
-  const r = selectAccountFor('carol', true)
-  assert.equal(r.ok && r.accountId, 'acc-b')
+  spend('sel-fallback-client', 'sel-fallback-a', 10)
+  const r = selectAccountFor('sel-fallback-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-fallback-b')
 })
 
 test('limitUsd = 0 là không giới hạn, không phải chặn', () => {
-  replaceBindings('carol', [
-    { accountId: 'acc-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+  makeLiveAccount('sel-unlimited-a')
+  insertClientRow({ name: 'sel-unlimited-client', token: 'tok-sel-unlimited' })
+  replaceBindings('sel-unlimited-client', [
+    { accountId: 'sel-unlimited-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
   ])
-  const r = selectAccountFor('carol', true)
-  assert.equal(r.ok && r.accountId, 'acc-a')
+  const r = selectAccountFor('sel-unlimited-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-unlimited-a')
 })
 
 test('cạn mọi account → reason quota, liệt kê đủ used/limit', () => {
-  replaceBindings('carol', [
-    { accountId: 'acc-a', priority: 1, limitUsd: 10, limitPeriod: 'lifetime' },
-    { accountId: 'acc-b', priority: 2, limitUsd: 5, limitPeriod: 'lifetime' },
+  makeLiveAccount('sel-quota-a')
+  makeLiveAccount('sel-quota-b')
+  insertClientRow({ name: 'sel-quota-client', token: 'tok-sel-quota' })
+  replaceBindings('sel-quota-client', [
+    { accountId: 'sel-quota-a', priority: 1, limitUsd: 10, limitPeriod: 'lifetime' },
+    { accountId: 'sel-quota-b', priority: 2, limitUsd: 5, limitPeriod: 'lifetime' },
   ])
-  spend('carol', 'acc-b', 5)
-  const r = selectAccountFor('carol', true)
+  spend('sel-quota-client', 'sel-quota-a', 10)
+  spend('sel-quota-client', 'sel-quota-b', 5)
+  const r = selectAccountFor('sel-quota-client', true)
   assert.equal(r.ok, false)
   assert.equal(!r.ok && r.reason, 'quota')
   const blocked = !r.ok && r.reason === 'quota' ? r.blocked : []
   assert.equal(blocked.length, 2)
-  assert.deepEqual(blocked.map((b) => b.accountId).sort(), ['acc-a', 'acc-b'])
-  assert.equal(blocked.find((b) => b.accountId === 'acc-a')!.usedUsd, 10)
-  assert.equal(blocked.find((b) => b.accountId === 'acc-a')!.limitUsd, 10)
+  assert.deepEqual(blocked.map((b) => b.accountId).sort(), ['sel-quota-a', 'sel-quota-b'])
+  assert.equal(blocked.find((b) => b.accountId === 'sel-quota-a')!.usedUsd, 10)
+  assert.equal(blocked.find((b) => b.accountId === 'sel-quota-a')!.limitUsd, 10)
 })
 
 test('đường không tính tiền vẫn đi được dù cạn hạn mức', () => {
-  const r = selectAccountFor('carol', false)
+  makeLiveAccount('sel-free-a')
+  makeLiveAccount('sel-free-b')
+  insertClientRow({ name: 'sel-free-client', token: 'tok-sel-free' })
+  replaceBindings('sel-free-client', [
+    { accountId: 'sel-free-a', priority: 1, limitUsd: 10, limitPeriod: 'lifetime' },
+    { accountId: 'sel-free-b', priority: 2, limitUsd: 5, limitPeriod: 'lifetime' },
+  ])
+  spend('sel-free-client', 'sel-free-a', 10)
+  spend('sel-free-client', 'sel-free-b', 5)
+  const r = selectAccountFor('sel-free-client', false)
   assert.equal(r.ok, true)
-  assert.equal(r.ok && r.accountId, 'acc-a')
+  assert.equal(r.ok && r.accountId, 'sel-free-a')
 })
 
 test('bỏ qua account expired, dùng cái kế tiếp', () => {
-  updateAccountRow('acc-a', { state: 'expired', accessToken: '', expiresAt: 0 })
-  replaceBindings('carol', [
-    { accountId: 'acc-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
-    { accountId: 'acc-c', priority: 2, limitUsd: 0, limitPeriod: 'lifetime' },
+  makeExpiredAccount('sel-expired-a')
+  makeLiveAccount('sel-expired-c')
+  insertClientRow({ name: 'sel-expired-client', token: 'tok-sel-expired' })
+  replaceBindings('sel-expired-client', [
+    { accountId: 'sel-expired-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+    { accountId: 'sel-expired-c', priority: 2, limitUsd: 0, limitPeriod: 'lifetime' },
   ])
-  const r = selectAccountFor('carol', true)
-  assert.equal(r.ok && r.accountId, 'acc-c')
+  const r = selectAccountFor('sel-expired-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-expired-c')
 })
 
 test('bỏ qua account bị tắt', () => {
-  updateAccountRow('acc-c', { enabled: false })
-  const r = selectAccountFor('carol', true)
+  makeDisabledAccount('sel-disabled-a')
+  insertClientRow({ name: 'sel-disabled-client', token: 'tok-sel-disabled' })
+  replaceBindings('sel-disabled-client', [
+    { accountId: 'sel-disabled-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+  ])
+  const r = selectAccountFor('sel-disabled-client', true)
   assert.equal(r.ok, false)
   assert.equal(!r.ok && r.reason, 'unavailable')
-  updateAccountRow('acc-c', { enabled: true })
 })
 
 test('client không có binding → reason no-bindings', () => {
-  insertClientRow({ name: 'dave', token: 'tok-dave' })
-  const r = selectAccountFor('dave', true)
+  insertClientRow({ name: 'sel-nobindings-client', token: 'tok-sel-nobindings' })
+  const r = selectAccountFor('sel-nobindings-client', true)
   assert.equal(r.ok, false)
   assert.equal(!r.ok && r.reason, 'no-bindings')
 })
 
 test('hạn mức hết hạn theo chu kỳ: daily tính lại từ đầu ngày UTC', () => {
-  insertClientRow({ name: 'erin', token: 'tok-erin' })
-  replaceBindings('erin', [
-    { accountId: 'acc-b', priority: 1, limitUsd: 1, limitPeriod: 'daily' },
+  makeLiveAccount('sel-daily-a')
+  insertClientRow({ name: 'sel-daily-client', token: 'tok-sel-daily' })
+  replaceBindings('sel-daily-client', [
+    { accountId: 'sel-daily-a', priority: 1, limitUsd: 1, limitPeriod: 'daily' },
   ])
   // Yesterday's spend must not count against today's daily limit.
   recordRequest({
     ts: Date.now() - 48 * HOUR,
-    client: 'erin',
-    accountId: 'acc-b',
+    client: 'sel-daily-client',
+    accountId: 'sel-daily-a',
     method: 'POST',
     path: '/v1/messages',
     status: 200,
     durationMs: 1,
     costUsd: 99,
   })
-  const r = selectAccountFor('erin', true)
-  assert.equal(r.ok && r.accountId, 'acc-b')
+  const r = selectAccountFor('sel-daily-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-daily-a')
+})
+
+test('cạn hạn mức + account khác đã chết → vẫn là quota, blocked chỉ gồm cái còn sống', () => {
+  makeLiveAccount('sel-mixed-a')
+  makeExpiredAccount('sel-mixed-b')
+  insertClientRow({ name: 'sel-mixed-client', token: 'tok-sel-mixed' })
+  replaceBindings('sel-mixed-client', [
+    { accountId: 'sel-mixed-a', priority: 1, limitUsd: 5, limitPeriod: 'lifetime' },
+    { accountId: 'sel-mixed-b', priority: 2, limitUsd: 0, limitPeriod: 'lifetime' },
+  ])
+  spend('sel-mixed-client', 'sel-mixed-a', 5)
+  const r = selectAccountFor('sel-mixed-client', true)
+  assert.equal(r.ok, false)
+  assert.equal(!r.ok && r.reason, 'quota')
+  const blocked = !r.ok && r.reason === 'quota' ? r.blocked : []
+  // sel-mixed-b never reaches the quota check — it has no usable access
+  // token — so it must NOT appear in `blocked`. `blocked` means "exhausted
+  // and live", not "every over-limit binding".
+  assert.equal(blocked.length, 1)
+  assert.equal(blocked[0].accountId, 'sel-mixed-a')
 })
 
 console.log(`\n${passed} passed, ${failed} failed\n`)
