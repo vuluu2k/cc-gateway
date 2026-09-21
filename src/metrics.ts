@@ -12,6 +12,9 @@ const RECENT_LIMIT = 50
 export interface RequestRecord {
   ts: number
   client: string
+  // Which upstream account paid for this request. Empty only for requests
+  // rejected before an account was picked.
+  accountId?: string
   method: string
   path: string
   status: number
@@ -55,14 +58,14 @@ export function recordRequest(rec: RequestRecord) {
     getDb()
       .prepare(
         `INSERT INTO request_metrics (
-          ts, client, method, path, status, duration_ms,
+          ts, client, account_id, method, path, status, duration_ms,
           model, input_tokens, output_tokens,
           cache_read_tokens, cache_creation_tokens, cost_usd,
           user_message, error_source, error_detail
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        rec.ts, rec.client, rec.method, rec.path, rec.status, rec.durationMs,
+        rec.ts, rec.client, rec.accountId || '', rec.method, rec.path, rec.status, rec.durationMs,
         rec.model || '',
         rec.inputTokens || 0,
         rec.outputTokens || 0,
@@ -89,6 +92,28 @@ export function getClientCostSince(client: string, sinceTs: number): number {
         'SELECT SUM(cost_usd) as cost FROM request_metrics WHERE client = ? AND ts >= ?',
       )
       .get(client, sinceTs) as { cost: number | null }
+    return row?.cost || 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Sum of cost_usd for one (client, account) pair since the given timestamp.
+ * This is what the per-binding quota is measured against — a client's spend on
+ * account A must not count toward its limit on account B.
+ */
+export function getClientAccountCostSince(
+  client: string,
+  accountId: string,
+  sinceTs: number,
+): number {
+  try {
+    const row = getDb()
+      .prepare(
+        'SELECT SUM(cost_usd) as cost FROM request_metrics WHERE client = ? AND account_id = ? AND ts >= ?',
+      )
+      .get(client, accountId, sinceTs) as { cost: number | null }
     return row?.cost || 0
   } catch {
     return 0
