@@ -2631,7 +2631,12 @@ Run: `grep -n "recordRequest({" src/proxy.ts`
 
 - [ ] **Step 4: Sửa các chỗ vỡ kiểu**
 
-`tokenEntry.cost_limit_usd` và `.cost_limit_period` không còn tồn tại. Trong `src/portal.ts`, thay chỗ hiển thị hạn mức phẳng bằng tổng hợp theo binding:
+`tokenEntry.cost_limit_usd` và `.cost_limit_period` không còn tồn tại.
+
+`src/portal.ts` **không sinh lỗi `tsc`** (đo sau Task 9): các chỗ nó đọc
+`cost_limit`/`home_dir` nằm trong template string nên không được kiểm kiểu. Nghĩa là
+trình biên dịch sẽ không nhắc bạn — nhưng nó vẫn hỏng lúc chạy, hiển thị `undefined`
+cho người dùng. Phải sửa, và phải tự kiểm bằng mắt chứ đừng chờ `tsc` báo:
 
 ```ts
 import { listBindings } from './accounts-store.js'
@@ -2656,17 +2661,53 @@ Rồi render danh sách này thay cho một con số. Thêm khoá i18n, **đủ 
 
 `tokenEntry.home_dir` đổi thành `tokenEntry.homeDir`.
 
-- [ ] **Step 5: Kiểm tra kiểu sạch**
+- [ ] **Step 5: Sửa `/_health` đọc `config.auth`**
+
+> **Bổ sung của controller sau Task 9.** Task 9 làm `auth` thành optional, nên
+> `src/proxy.ts:119` — `clients: config.auth.tokens.map(t => t.name)` trong `/_health` —
+> báo `'config.auth' is possibly 'undefined'`. Đây KHÔNG phải khối cost-limit và không
+> nằm trong danh sách lỗi dự kiến ban đầu, nhưng nó là một trong 10 lỗi Task 10 phải dọn.
+>
+> Đừng chỉ thêm `?.` cho hết đỏ. `config.auth.tokens` giờ là dữ liệu chết — client nằm
+> trong DB. Đọc từ nguồn thật:
+
+```ts
+      clients: listClientRows().map((c) => c.name),
+```
+
+(Task 15 sẽ viết lại toàn bộ endpoint này và bỏ hẳn trường `clients`; sửa ở đây chỉ để
+`tsc` sạch và để `/_health` không nói dối trong khoảng giữa hai task.)
+
+- [ ] **Step 6: Kiểm tra kiểu sạch**
 
 Run: `npx tsc --noEmit`
-Expected: **không còn lỗi nào** — mọi lỗi ghi lại ở Task 9 Step 6 phải đã hết
+Expected: **không còn lỗi nào.** Task 9 kết thúc với đúng 10 lỗi, tất cả trong
+`src/proxy.ts` (đã đo độc lập, `src/portal.ts` không có lỗi nào vì các chỗ nó đọc
+`cost_limit`/`home_dir` nằm trong template string, không được kiểm kiểu). Đối chiếu đủ
+cả 10:
 
-- [ ] **Step 6: Chạy toàn bộ test**
+```
+proxy.ts(119,16)  TS18048  'config.auth' is possibly 'undefined'        -> Step 4b
+proxy.ts(175,57)  TS2339   cost_limit_usd không tồn tại trên ClientEntry -> Step 1
+proxy.ts(175,86)  TS2339   cost_limit_usd                                -> Step 1
+proxy.ts(176,42)  TS2339   cost_limit_period                             -> Step 1
+proxy.ts(178,28)  TS2339   cost_limit_usd                                -> Step 1
+proxy.ts(179,38)  TS2339   cost_limit_period                             -> Step 1
+proxy.ts(186,31)  TS2339   cost_limit_usd                                -> Step 1
+proxy.ts(188,113) TS2339   cost_limit_usd                                -> Step 1
+proxy.ts(197,75)  TS2339   cost_limit_usd                                -> Step 1
+proxy.ts(250,56)  TS2551   home_dir -> homeDir                           -> Step 2
+```
+
+Tám lỗi từ dòng 175 đến 197 biến mất khi khối cost-limit cũ được thay bằng
+`selectAccountFor` ở Step 1. Nếu còn sót lỗi nào, nghĩa là khối cũ chưa bị thay hết.
+
+- [ ] **Step 7: Chạy toàn bộ test**
 
 Run: `npm test`
 Expected: mọi suite PASS
 
-- [ ] **Step 7: Khói thử bằng tay**
+- [ ] **Step 8: Khói thử bằng tay**
 
 ```bash
 rm -rf /tmp/ccg-smoke && mkdir -p /tmp/ccg-smoke
@@ -2675,7 +2716,7 @@ npx tsx src/index.ts /tmp/ccg-smoke/config.yaml
 
 Expected: gateway khởi động, log `No upstream accounts configured`, không crash. `curl -sk https://localhost:8443/_health` (hoặc http tuỳ cấu hình TLS) trả 200. Dừng bằng Ctrl-C.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/proxy.ts src/portal.ts src/i18n.ts
