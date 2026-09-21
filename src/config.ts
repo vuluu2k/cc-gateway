@@ -33,7 +33,7 @@ export type Config = {
   auth: {
     tokens: TokenEntry[]
   }
-  oauth: {
+  oauth?: {
     access_token?: string
     refresh_token: string
     expires_at?: number
@@ -80,9 +80,5 @@ export function loadConfig(configPath?: string): Config {
   if (!config.auth?.tokens?.length) {
     throw new Error('config: auth.tokens must have at least one entry')
   }
-  if (!config.oauth?.refresh_token) {
-    throw new Error('config: oauth.refresh_token is required. Do a browser OAuth login on the admin machine, then copy the refresh token from ~/.claude/.credentials.json')
-  }
-
   return config
 }

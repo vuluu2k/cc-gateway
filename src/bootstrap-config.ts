@@ -164,16 +164,21 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
 }
 
 /**
- * Persist a refreshed OAuth token bundle into config.yaml's `oauth:` section.
- * Round-trips through parseDocument so user edits / comments are preserved.
+ * Write an OAuth token bundle into config.yaml's `oauth:` section. Round-trips
+ * through parseDocument so user edits / comments are preserved.
+ *
+ * Not exported: the gateway no longer treats config.yaml's `oauth:` block as
+ * live runtime state (accounts.ts + SQLite do), so the only remaining writer
+ * is syncOAuthFromCredentialsIfChanged below, keeping the bootstrap/migration
+ * seed fresh before the (not yet wired) accounts migration reads it.
  */
-export function updateConfigOAuth(
+function writeConfigOAuth(
   configPath: string,
   next: { accessToken: string; refreshToken: string; expiresAt: number },
 ): void {
   const absPath = resolve(configPath)
   if (!existsSync(absPath)) {
-    log('warn', `updateConfigOAuth: ${absPath} does not exist, skipping persist`)
+    log('warn', `writeConfigOAuth: ${absPath} does not exist, skipping persist`)
     return
   }
   try {
@@ -189,7 +194,7 @@ export function updateConfigOAuth(
     oauth.set('expires_at', next.expiresAt)
     writeFileSync(absPath, doc.toString(), 'utf-8')
   } catch (err) {
-    log('error', `updateConfigOAuth failed: ${err instanceof Error ? err.message : err}`)
+    log('error', `writeConfigOAuth failed: ${err instanceof Error ? err.message : err}`)
   }
 }
 
@@ -267,7 +272,7 @@ export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
   }
 
   log('info', 'Mounted credentials are newer than config.yaml — syncing refresh_token')
-  updateConfigOAuth(absPath, {
+  writeConfigOAuth(absPath, {
     accessToken: creds.accessToken || '',
     refreshToken: creds.refreshToken,
     expiresAt: credsExpiresAt,

@@ -2,7 +2,7 @@ import { watchFile } from 'fs'
 import { resolve } from 'path'
 import { loadConfig } from './config.js'
 import { setLogLevel, log } from './logger.js'
-import { initOAuth, setOnTokensUpdated } from './oauth.js'
+import { initAccounts } from './accounts.js'
 import { startProxy } from './proxy.js'
 import { initAuth } from './auth.js'
 import { initDb } from './db.js'
@@ -11,7 +11,6 @@ import { countUsers } from './users.js'
 import {
   bootstrapConfigIfMissing,
   syncOAuthFromCredentialsIfChanged,
-  updateConfigOAuth,
 } from './bootstrap-config.js'
 import { syncClaudeCodeVersion, startDailyVersionAutoUpdate } from './cc-version.js'
 
@@ -46,13 +45,6 @@ try {
     startDailyVersionAutoUpdate(configPath, config)
   }
 
-  // Whenever OAuth refreshes (immediately or on the schedule), persist the
-  // rotated refresh_token back to config.yaml so container restarts pick up
-  // the latest valid token instead of replaying a consumed one.
-  setOnTokensUpdated((tokens) => {
-    updateConfigOAuth(configPath, tokens)
-  })
-
   const dbPath = config.db?.path || './data/ccg.db'
   initDb(dbPath)
   initMetrics()
@@ -61,16 +53,10 @@ try {
     log('warn', 'No dashboard users yet. Create one with: npm run add-user <username>')
   }
 
-  // Initialize OAuth — uses existing access token if valid, only refreshes when
-  // expired. A dead refresh_token must NOT abort startup: the admin needs the
-  // dashboard up in order to re-login, and /v1/* already answers 503 while the
-  // gateway has no usable token.
-  const oauthReady = await initOAuth(config.oauth)
-  if (!oauthReady) {
-    log('warn', 'Starting in degraded mode: no valid OAuth token.')
-    log('warn', '  Proxy requests will return 503 until you re-authenticate.')
-    log('warn', '  Open the admin dashboard and use "Re-login with Claude".')
-  }
+  // Initialize every upstream account — each gets its own refresh timer. Never
+  // throws: a dead refresh_token parks THAT account in `expired` and leaves
+  // the others running, so the admin always has the dashboard to re-login.
+  await initAccounts()
 
   startProxy(config)
 

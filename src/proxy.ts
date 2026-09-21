@@ -7,12 +7,13 @@ import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, initAuth, setAuthTokens } from './auth.js'
 import {
-  getAccessToken,
-  getOAuthStatus,
-  beginOAuthLogin,
-  completeOAuthLogin,
-  cancelOAuthLogin,
-} from './oauth.js'
+  listAccounts,
+  getAccessTokenFor,
+  isUsable,
+  beginLogin,
+  completeLogin,
+  cancelLogin,
+} from './accounts.js'
 import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from './rewriter.js'
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
@@ -101,15 +102,18 @@ async function handleRequest(
 
   // Health check - no auth required
   if (pathname === '/_health') {
-    const oauthOk = !!getAccessToken()
-    const oauthStatus = getOAuthStatus()
+    // TEMPORARY - Task 7 replaces this with selectAccountFor(). It only keeps
+    // the gateway runnable between the two tasks.
+    const accounts = listAccounts()
+    const firstUsable = accounts.find((a) => isUsable(a.id))
+    const oauthOk = !!firstUsable
     const status = oauthOk ? 200 : 503
     res.writeHead(status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       status: oauthOk ? 'ok' : 'degraded',
       oauth: oauthOk ? 'valid' : 'expired/refreshing',
-      oauth_state: oauthStatus.state,
-      oauth_error: oauthStatus.last_error,
+      oauth_state: firstUsable?.state ?? accounts[0]?.state ?? 'uninitialized',
+      oauth_error: firstUsable?.lastError ?? accounts[0]?.lastError ?? null,
       canonical_device: config.identity.device_id.slice(0, 8) + '...',
       canonical_platform: config.env.platform,
       upstream: config.upstream.url,
@@ -201,7 +205,10 @@ async function handleRequest(
   log('info', `Client "${clientName}" → ${method} ${path}`)
 
   // Get the real OAuth token (managed by gateway)
-  const oauthToken = getAccessToken()
+  // TEMPORARY - Task 7 replaces this with selectAccountFor(). It only keeps
+  // the gateway runnable between the two tasks.
+  const firstUsable = listAccounts().find((a) => isUsable(a.id))
+  const oauthToken = firstUsable ? getAccessTokenFor(firstUsable.id) : null
   if (!oauthToken) {
     res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'oauth-refreshing' })
     res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
@@ -738,23 +745,25 @@ async function handleDashboardArea(
   }
 
   if (pathname === '/_metrics') {
+    // TEMPORARY - Task 11 gives /_metrics a proper per-account shape.
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify({ ...getMetricsSnapshot(), oauth: getOAuthStatus() }))
+    res.end(JSON.stringify({ ...getMetricsSnapshot(), accounts: listAccounts() }))
     return
   }
 
   // ── OAuth re-login (authorization code + PKCE, manual paste flow) ──
-  // Lets an admin re-authenticate the gateway's upstream Claude account from
-  // the browser when the refresh_token dies, instead of editing config.yaml
-  // and restarting the container.
+  // Lets an admin re-authenticate an upstream Claude account from the browser
+  // when its refresh_token dies, instead of editing config.yaml and
+  // restarting the container.
   if (pathname === '/api/oauth') {
     if (method !== 'GET') {
       res.writeHead(405, { Allow: 'GET' })
       res.end()
       return
     }
+    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify(getOAuthStatus()))
+    res.end(JSON.stringify({ accounts: listAccounts() }))
     return
   }
 
@@ -764,8 +773,16 @@ async function handleDashboardArea(
       res.end()
       return
     }
-    const started = beginOAuthLogin()
-    log('info', `User "${session.u}" started an OAuth re-login`)
+    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
+    // Until then a re-login always targets the first configured account.
+    const target = listAccounts()[0]
+    if (!target) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'No accounts configured' }))
+      return
+    }
+    const started = beginLogin(target.id)
+    log('info', `User "${session.u}" started an OAuth re-login for account "${target.id}"`)
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify(started))
     return
@@ -799,11 +816,19 @@ async function handleDashboardArea(
       res.end(JSON.stringify({ error: 'Authorization code is required' }))
       return
     }
+    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
+    // Until then a re-login always targets the first configured account.
+    const target = listAccounts()[0]
+    if (!target) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'No accounts configured' }))
+      return
+    }
     try {
-      const result = await completeOAuthLogin(code)
-      log('info', `User "${session.u}" completed an OAuth re-login`)
+      const result = await completeLogin(target.id, code)
+      log('info', `User "${session.u}" completed an OAuth re-login for account "${target.id}"`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, ...result, status: getOAuthStatus() }))
+      res.end(JSON.stringify({ ok: true, ...result, accounts: listAccounts() }))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log('warn', `OAuth re-login by "${session.u}" failed: ${message}`)
@@ -819,7 +844,9 @@ async function handleDashboardArea(
       res.end()
       return
     }
-    cancelOAuthLogin()
+    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
+    const target = listAccounts()[0]
+    if (target) cancelLogin(target.id)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
     return
