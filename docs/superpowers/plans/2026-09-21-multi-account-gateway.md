@@ -25,7 +25,7 @@
 - **i18n chạy phía trình duyệt.** HTML đánh dấu bằng `data-i18n` / `data-i18n-html` / `data-i18n-ph`; JS sinh chuỗi thì gọi `window.t(key, vars)` (trong `dashboard.ts` đã có sẵn alias `const t = (k, v) => (window.t ? window.t(k, v) : k)`). **Không** render sẵn chuỗi đã dịch từ server.
 - Comment trong code viết bằng **tiếng Anh**, theo đúng phần còn lại của repo.
 - Commit message chỉ dùng ký tự ASCII.
-- Sau mỗi task: `npm test` xanh và `npx tsc --noEmit` sạch.
+- Sau mỗi task: `npm test` xanh và `npx tsc --noEmit` sạch. **Một ngoại lệ duy nhất: Task 9.** Nó đổi kiểu trả về của `authenticate()` nên `src/proxy.ts` và `src/portal.ts` chắc chắn vỡ kiểu cho tới khi Task 10 sửa. Task 9 được commit với `tsc` còn lỗi **chỉ ở hai file đó**; Task 10 bắt buộc trả `tsc` về sạch. Mọi task khác không có ngoại lệ.
 
 ## Lưu ý về test và DB
 
@@ -127,15 +127,17 @@ test('request_metrics có cột account_id mặc định rỗng', () => {
 
 test('client_accounts cascade khi xoá client', () => {
   const db = getDb()
+  // Tham số hoá device_id: SQLite không chạy `.repeat()` của JavaScript bên
+  // trong chuỗi SQL.
   db.prepare(
-    `INSERT INTO accounts (id, device_id, created_at) VALUES ('a1', 'ab'.repeat(32), 0)`,
-  ).run()
+    'INSERT INTO accounts (id, device_id, created_at) VALUES (?, ?, ?)',
+  ).run('a1', 'ab'.repeat(32), 0)
   db.prepare(
-    `INSERT INTO clients (name, token, created_at) VALUES ('c1', 'tok1', 0)`,
-  ).run()
+    'INSERT INTO clients (name, token, created_at) VALUES (?, ?, ?)',
+  ).run('c1', 'tok1', 0)
   db.prepare(
-    `INSERT INTO client_accounts (client_name, account_id) VALUES ('c1', 'a1')`,
-  ).run()
+    'INSERT INTO client_accounts (client_name, account_id) VALUES (?, ?)',
+  ).run('c1', 'a1')
   db.prepare(`DELETE FROM clients WHERE name = 'c1'`).run()
   const left = db
     .prepare(`SELECT COUNT(*) AS n FROM client_accounts`)
@@ -2597,7 +2599,13 @@ const quotas = listBindings(clientName).map((b) => ({
 }))
 ```
 
-Rồi render danh sách này thay cho một con số. Thêm khoá i18n `portal.quotaPerAccount` (en: `Quota per account`, vi: `Hạn mức theo tài khoản`).
+Rồi render danh sách này thay cho một con số. Thêm khoá i18n, **đủ ba ngôn ngữ**:
+
+```ts
+  'portal.quotaPerAccount': {
+    en: 'Quota per account', vi: 'Hạn mức theo tài khoản', zh: '各账户限额',
+  },
+```
 
 `tokenEntry.home_dir` đổi thành `tokenEntry.homeDir`.
 
