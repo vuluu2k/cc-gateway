@@ -2933,7 +2933,37 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
   }
 ```
 
-- [ ] **Step 5: Cập nhật bảng định tuyến**
+- [ ] **Step 5: Sửa câu chữ 429 cho khỏi nói quá**
+
+> **Phát hiện của review Task 10.** `blocked` chỉ chứa binding **cạn hạn mức VÀ còn sống**
+> — `src/accounts.ts:395-398` `continue` khi `getAccountRow`/`getAccessTokenFor` trả null,
+> trước khi tới bước kiểm quota ở `:400`. Nhưng hai chuỗi ở `src/proxy.ts:207` và `:230`
+> (cả hai nguyên văn từ brief của controller, nên đây là lỗi của controller) lại đọc như
+> thể đã liệt kê hết:
+>
+> - `error: 'Cost limit reached on every account'`
+> - detail: `cost limit reached on all ${selected.blocked.length} account(s)`
+>
+> Với một client có 1 account chết và 2 account cạn hạn mức, người vận hành thấy "2" rồi
+> kết luận có 2 — **không bao giờ biết có một account chết**, mà đó lại đúng là cái họ
+> sửa được ngay. Con số không sai; câu chữ mới sai.
+
+Đổi thành:
+
+```ts
+      error: 'Cost limit reached on every usable account',
+      client: clientName,
+      note: 'Accounts that are disabled or need re-login are not listed here',
+      accounts: selected.blocked.map((b) => ({ ... })),
+```
+
+và dòng detail:
+
+```ts
+        ? `cost limit reached on all ${selected.blocked.length} usable account(s)`
+```
+
+- [ ] **Step 6: Cập nhật bảng định tuyến**
 
 Ở khối điều kiện dòng 123-135, thay hai dòng `/api/oauth` bằng:
 
@@ -2942,7 +2972,7 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
     pathname.startsWith('/api/accounts/') ||
 ```
 
-- [ ] **Step 5b: XOÁ ba route `/api/oauth/*` cầu tạm, không sửa lại chúng**
+- [ ] **Step 7: XOÁ ba route `/api/oauth/*` cầu tạm, không sửa lại chúng**
 
 > **Chỉ thị của controller (từ review Task 5).** Task 5 để lại `/api/oauth/login`,
 > `/api/oauth/complete`, `/api/oauth/cancel` dùng `listAccounts()[0]` — "account tạo
@@ -2955,7 +2985,7 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
 > dưới một cái tên lịch sự hơn — vẫn đúng lỗi trên. Chỉ `/api/accounts/:id/login`,
 > `/complete`, `/cancel` được tồn tại, vì chúng bắt buộc phải nêu tên account.
 
-- [ ] **Step 6: Khôi phục banner OAuth trên dashboard**
+- [ ] **Step 8: Khôi phục banner OAuth trên dashboard**
 
 > **Bổ sung của controller (2026-09-21).** Task 5 đã đổi `/_metrics` từ
 > `oauth: getOAuthStatus()` sang `accounts: [...]`. `src/dashboard.ts:507-509` có một
@@ -2983,11 +3013,11 @@ nếu Task 13 đã chạy; nếu chưa thì thêm khoá tạm `admin.oauth.someE
   },
 ```
 
-- [ ] **Step 7: Cập nhật `/_metrics`**
+- [ ] **Step 9: Cập nhật `/_metrics`**
 
 Đổi `oauth: getOAuthStatus()` thành `accounts: listAccounts()`.
 
-- [ ] **Step 8: Kiểm tra bằng tay**
+- [ ] **Step 10: Kiểm tra bằng tay**
 
 ```bash
 rm -rf /tmp/ccg-api && mkdir -p /tmp/ccg-api
@@ -3007,12 +3037,12 @@ curl -s -b "ccg_session=<cookie>" -X POST localhost:8443/api/accounts/pro-1/logi
 
 Expected: lần lượt `{"accounts":[]}`, `201` với account mới, và một URL `claude.com/cai/oauth/authorize?...`. Dừng tiến trình.
 
-- [ ] **Step 9: Kiểm tra kiểu và test**
+- [ ] **Step 11: Kiểm tra kiểu và test**
 
 Run: `npx tsc --noEmit && npm test`
 Expected: sạch, mọi suite PASS
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add src/proxy.ts
@@ -3091,7 +3121,17 @@ export function setClientHomeDir(name: string, homeDir: string | null): ClientEn
 }
 ```
 
-`setClientLimit` bị xoá — hạn mức giờ là thuộc tính của binding, đặt qua `PUT /api/clients/:name/accounts`. Xoá luôn `applyLimitToYamlEntry` và type `ClientLimitInput`; sửa mọi chỗ gọi trong `src/proxy.ts` và `src/dashboard.ts`.
+`setClientLimit` bị xoá — hạn mức giờ là thuộc tính của binding, đặt qua `PUT /api/clients/:name/accounts`.
+
+> **Cảnh báo từ review Task 10.** Bỏ `cost_limit_usd`/`cost_limit_period` khỏi `ClientEntry`
+> sẽ làm vỡ `src/proxy.ts:1327-1329` — thẻ "Your credit" ở đầu trang portal vẫn đọc
+> `client.cost_limit_usd` từ kho YAML cũ. Hiện tại nó **không** lỗi lúc chạy (trường vẫn
+> tồn tại trong YAML), nhưng nó hiển thị một hạn mức **không còn gác gì cả**: portal có thể
+> khoe "$40 còn lại" bằng cỡ chữ 36px trong khi mọi request đều bị 429 vì hạn mức
+> per-account ở thẻ nhỏ bên dưới.
+>
+> Ở task này chỉ cần gỡ ba dòng đó cho `tsc` sạch và **không** hiển thị con số dối. Việc
+> thiết kế lại thẻ đó là của Task 14. Xoá luôn `applyLimitToYamlEntry` và type `ClientLimitInput`; sửa mọi chỗ gọi trong `src/proxy.ts` và `src/dashboard.ts`.
 
 `normalizeHomeDir` giữ nguyên. Thêm `import { getDb } from './db.js'`.
 
@@ -3544,18 +3584,44 @@ Thêm cột Account vào bảng request gần đây và một `<select>` lọc t
 
 Hoàn thiện phần đã dựng ở Task 10 Step 4: render `quotas` thành bảng nhỏ với `portal.quotaPerAccount` làm tiêu đề, mỗi hàng là `account · used / limit · period`. Hạn mức `0` hiện `bind.unlimited`.
 
-- [ ] **Step 5: Kiểm tra bằng mắt**
+- [ ] **Step 5: Thiết kế lại thẻ "Your credit" ở đầu trang portal**
+
+> **Giao từ review Task 10** — trước đó **không task nào sở hữu việc này.** Thẻ hero
+> (`src/proxy.ts:1327-1329` + phần render trong `src/portal.ts`) hiển thị một con số hạn
+> mức duy nhất lấy từ `client.cost_limit_usd`. Sau Task 12 nguồn đó không còn tồn tại, và
+> kể cả khi còn thì nó cũng không gác gì nữa.
+
+Thay bằng thứ phản ánh đúng mô hình mới. Client giờ có N hạn mức, không phải một, nên
+một con số to duy nhất là sai về bản chất. Hai lựa chọn, chọn cái hợp với bố cục hiện có:
+
+- **Tổng hợp:** hiện tổng còn lại cộng qua mọi binding có giới hạn, kèm dòng phụ
+  "qua N tài khoản". Nếu có binding không giới hạn thì hiện "không giới hạn" thay cho tổng.
+- **Bỏ thẻ hero:** đôn bảng hạn mức per-account (đã dựng ở Task 10) lên vị trí đó.
+
+Dù chọn cách nào, **không được hiện một con số ngụ ý là hạn mức duy nhất.** Thà bỏ thẻ
+còn hơn để nó nói dối.
+
+Khoá i18n nếu chọn phương án tổng hợp, đủ ba ngôn ngữ:
+
+```ts
+  'portal.creditAcross': {
+    en: 'across {n} account(s)', vi: 'qua {n} tài khoản', zh: '跨 {n} 个账户',
+  },
+  'portal.creditUnlimited': { en: 'Unlimited', vi: 'Không giới hạn', zh: '不限' },
+```
+
+- [ ] **Step 6: Kiểm tra bằng mắt**
 
 Tạo hai account và một client, gán cả hai với priority 1 và 2, đặt hạn mức, Save, tải lại trang.
 
 Expected: binding hiện đúng sau khi tải lại; đăng nhập portal bằng token của client đó thấy đủ hai dòng hạn mức.
 
-- [ ] **Step 6: Kiểm tra kiểu và test**
+- [ ] **Step 7: Kiểm tra kiểu và test**
 
 Run: `npx tsc --noEmit && npm test`
 Expected: sạch, mọi suite PASS
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/dashboard.ts src/portal.ts src/metrics.ts src/i18n.ts
