@@ -3604,7 +3604,7 @@ Khoá i18n mới, đủ ba ngôn ngữ:
   'setup.badCode': { en: 'Wrong setup code', vi: 'Mã cài đặt không đúng', zh: '设置码不正确' },
 ```
 
-- [ ] **Step 3c: Làm `migrateFromConfig` chịu được config.yaml trùng tên client**
+- [ ] **Step 4: Làm `migrateFromConfig` chịu được config.yaml trùng tên client**
 
 > **Bổ sung của controller (ruling, 2026-09-21).** Review Task 3 phát hiện: nếu
 > `auth.tokens` cũ có hai entry trùng `name` (hoặc trùng `token`), `insertClientRow`
@@ -3664,7 +3664,7 @@ test('config trùng tên client thì bỏ qua bản sau, không ném', () => {
 })
 ```
 
-- [ ] **Step 4: Nối thứ tự khởi động trong `src/index.ts`**
+- [ ] **Step 5: Nối thứ tự khởi động trong `src/index.ts`**
 
 ```ts
   initDb(dbPath)
@@ -3693,7 +3693,60 @@ test('config trùng tên client thì bỏ qua bản sau, không ném', () => {
   startProxy(config)
 ```
 
-- [ ] **Step 5: Sửa `docker-compose.yml`**
+- [ ] **Step 6: `/_health` phải trả 200 khi tiến trình còn sống**
+
+> **Phát hiện của controller từ khói thử (2026-09-21), KHÔNG phải hồi quy của Task 5 —
+> lỗi này có từ trước.** `src/proxy.ts` trả `503` cho `/_health` bất cứ khi nào không
+> có account nào dùng được. `docker-compose.yml` lại dùng:
+>
+> ```
+> test: ["CMD", "node", "-e", "fetch('http://localhost:8443/_health').then(r=>{process.exit(r.ok?0:1)})..."]
+> ```
+>
+> `r.ok` chỉ đúng với 200-299. Nên: **không có account → healthcheck fail → sau 3 lần
+> retry Docker đánh dấu container unhealthy → Traefik gỡ nó khỏi pool → dashboard
+> không truy cập được.**
+>
+> Đó chính là triệu chứng ban đầu của người dùng, đi vào bằng một cửa khác. Nó cũng mâu
+> thuẫn trực tiếp với §9 của spec: *"Không account nào sống → `/v1/*` trả 503, dashboard
+> vẫn chạy."* Dashboard không chạy được nếu Traefik không định tuyến tới nó.
+>
+> Và nó đặc biệt nguy hiểm với đường cài mới: một server trắng **chưa từng** có account
+> nào, nên container sinh ra đã unhealthy và admin không bao giờ vào nổi dashboard để
+> thêm account đầu tiên. Đường docker-only sẽ không dùng được nếu không sửa.
+
+Sửa `/_health` trong `src/proxy.ts`: **luôn trả 200** chừng nào tiến trình còn phục vụ
+được. Tình trạng OAuth thuộc về phần body, không phải mã HTTP:
+
+```ts
+  if (pathname === '/_health') {
+    const accounts = listAccounts()
+    const usable = accounts.filter((a) => isUsable(a.id))
+    // Always 200 while the process is serving. The container's healthcheck reads
+    // this, and an unhealthy container is dropped from Traefik's pool - which
+    // would take the dashboard down exactly when an admin needs it to re-login.
+    // Degraded upstream state belongs in the body, not the status code.
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      status: usable.length > 0 ? 'ok' : 'degraded',
+      accounts_total: accounts.length,
+      accounts_usable: usable.length,
+      accounts_expired: accounts.filter((a) => a.state === 'expired').map((a) => a.id),
+      upstream: config.upstream.url,
+    }))
+    return
+  }
+```
+
+Bỏ `canonical_device` / `canonical_platform` / `clients` khỏi endpoint **không cần xác
+thực** này: `clients` lộ danh sách tên client, `canonical_device` lộ 8 ký tự đầu của
+device_id, và cả hai giờ đều là giá trị per-account nên không còn nghĩa ở cấp gateway.
+
+Ai muốn theo dõi "có account nào chết không" thì đọc `accounts_usable` /
+`accounts_expired` trong body — chính xác hơn mã trạng thái, vì phân biệt được
+"chưa cài xong" với "token đã chết".
+
+- [ ] **Step 7: Sửa `docker-compose.yml`**
 
 Chuyển mount credentials thành comment:
 
@@ -3709,7 +3762,7 @@ Chuyển mount credentials thành comment:
       # - /root/.claude/.credentials.json:/app/data/claude-credentials.json:ro
 ```
 
-- [ ] **Step 6: Khói thử đường docker-only**
+- [ ] **Step 8: Khói thử đường docker-only**
 
 ```bash
 rm -rf /tmp/ccg-fresh && mkdir -p /tmp/ccg-fresh
@@ -3718,16 +3771,16 @@ env -u CCG_REFRESH_TOKEN npx tsx src/index.ts /tmp/ccg-fresh/config.yaml
 
 Expected: gateway **khởi động thành công** (không `exit(1)`), log cảnh báo không có account, và in một setup code. Mở `/admin` thấy form tạo admin; nhập sai code bị từ chối, nhập đúng thì vào thẳng `/dashboard`. Gọi `curl localhost:8443/v1/messages` trả 503 chứ không phải treo.
 
-- [ ] **Step 7: Cập nhật README**
+- [ ] **Step 9: Cập nhật README**
 
 Trong cả `README.md` và `README.vi.md`: thay phần hướng dẫn "trích token trên máy local rồi mount" bằng luồng mới (`docker compose up` → setup code trong log → tạo admin → thêm account trên web), và ghi rõ `CCG_REFRESH_TOKEN` giờ là tuỳ chọn. Bổ sung một mục ngắn về nhiều account và gán client.
 
-- [ ] **Step 8: Kiểm tra lần cuối**
+- [ ] **Step 10: Kiểm tra lần cuối**
 
 Run: `npm test && npx tsc --noEmit && npm run build`
 Expected: mọi suite PASS, không lỗi kiểu, build ra `dist/` thành công
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add src/bootstrap-config.ts src/index.ts src/users.ts src/proxy.ts src/i18n.ts docker-compose.yml README.md README.vi.md
