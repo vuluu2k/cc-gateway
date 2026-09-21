@@ -4,7 +4,6 @@ import { loadConfig } from './config.js'
 import { setLogLevel, log } from './logger.js'
 import { initAccounts } from './accounts.js'
 import { startProxy } from './proxy.js'
-import { initAuth } from './auth.js'
 import { initDb } from './db.js'
 import { initMetrics } from './metrics.js'
 import { countUsers } from './users.js'
@@ -60,29 +59,23 @@ try {
 
   startProxy(config)
 
-  // Hot-reload auth.tokens + env.version on config changes (poll-based — works
-  // with bind mounts). The env.version sync lets an external cron / manual edit
-  // to config.yaml take effect live without restarting the gateway.
+  // Hot-reload env.version on config changes (poll-based — works with bind
+  // mounts). This lets an external cron / manual edit to config.yaml take
+  // effect live without restarting the gateway. Clients no longer live in
+  // config.yaml (they're DB rows — see src/auth.ts), so this poll only
+  // syncs env.version now.
   const watchPath = resolve(configPath)
-  let lastTokenSig = JSON.stringify(config.auth.tokens)
   watchFile(watchPath, { interval: 2000 }, () => {
     try {
       const next = loadConfig(configPath)
-
       const nextVersion = String(next.env.version || '')
       if (nextVersion && nextVersion !== String(config.env.version || '')) {
         config.env.version = nextVersion
         config.env.version_base = String(next.env.version_base || nextVersion)
         log('info', `Reloaded Claude Code version: ${nextVersion}`)
       }
-
-      const sig = JSON.stringify(next.auth.tokens)
-      if (sig === lastTokenSig) return
-      initAuth(next)
-      lastTokenSig = sig
-      log('info', `Reloaded auth.tokens (${next.auth.tokens.length} entries: ${next.auth.tokens.map(t => t.name).join(', ')})`)
     } catch (err) {
-      log('error', `Config reload failed, keeping existing tokens: ${err instanceof Error ? err.message : err}`)
+      log('error', `Config reload failed: ${err instanceof Error ? err.message : err}`)
     }
   })
 } catch (err) {

@@ -30,7 +30,7 @@ export type Config = {
   upstream: {
     url: string
   }
-  auth: {
+  auth?: {
     tokens: TokenEntry[]
   }
   oauth?: {
@@ -74,11 +74,9 @@ export function loadConfig(configPath?: string): Config {
   const raw = readFileSync(filePath, 'utf-8')
   const config = parse(raw) as Config
 
-  if (!config.identity?.device_id || config.identity.device_id.includes('0000000000')) {
-    throw new Error('config: identity.device_id must be set to a real 64-char hex value. Run: npm run generate-identity')
-  }
-  if (!config.auth?.tokens?.length) {
-    throw new Error('config: auth.tokens must have at least one entry')
-  }
+  // identity/env/prompt_env are now DEFAULTS stamped onto newly created
+  // accounts, not the live fingerprint - so a placeholder device_id is no
+  // longer fatal. Accounts carry the real one (see src/accounts-store.ts).
+  // auth.tokens and oauth are read once by the migration and never again.
   return config
 }

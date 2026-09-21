@@ -5,7 +5,8 @@ import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import zlib from 'zlib'
 import type { Config } from './config.js'
-import { authenticate, initAuth, setAuthTokens } from './auth.js'
+import { authenticate, reloadClients } from './auth.js'
+import { listAccountRows, listClientRows } from './accounts-store.js'
 import {
   listAccounts,
   getAccessTokenFor,
@@ -49,13 +50,8 @@ import {
 import { addClient, listClients, removeClient, setClientLimit, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
 import type { CostLimitPeriod } from './config.js'
 
-/** Refresh in-memory token map from current config.yaml on disk. */
-function reloadAuthFromConfig(): void {
-  setAuthTokens(listClients())
-}
-
 export function startProxy(config: Config) {
-  initAuth(config)
+  reloadClients()
 
   const upstream = new URL(config.upstream.url)
   const useTls = config.server.tls?.cert && config.server.tls?.key
@@ -79,8 +75,11 @@ export function startProxy(config: Config) {
   server.listen(config.server.port, () => {
     log('info', `CC Gateway listening on ${useTls ? 'https' : 'http'}://0.0.0.0:${config.server.port}`)
     log('info', `Upstream: ${config.upstream.url}`)
-    log('info', `Canonical device_id: ${config.identity.device_id.slice(0, 8)}...`)
-    log('info', `Authorized clients: ${config.auth.tokens.map(t => t.name).join(', ')}`)
+    const clients = listClientRows()
+    log('info', `Accounts: ${listAccountRows().length}, clients: ${clients.length}`)
+    if (clients.length > 0) {
+      log('info', `Authorized clients: ${clients.map((c) => c.name).join(', ')}`)
+    }
   })
 
   return server
@@ -939,7 +938,7 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadAuthFromConfig()
+      reloadClients()
       // Generate a one-time portal password the admin hands to the client.
       let portalPassword = ''
       try {
@@ -1067,7 +1066,7 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'not found' }))
         return
       }
-      reloadAuthFromConfig()
+      reloadClients()
       removeClientPassword(name)
       removeClientProfile(name)
       log('info', `User "${session.u}" removed client "${name}"`)
@@ -1118,7 +1117,7 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadAuthFromConfig()
+      reloadClients()
       log('info', `User "${session.u}" updated client "${name}"`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
@@ -1356,7 +1355,7 @@ async function handlePortalArea(
       // back to their machine. Same writer the admin uses.
       if ('home_dir' in payload) {
         homeDir = setClientHomeDir(client.name, payload.home_dir ?? null).home_dir ?? null
-        reloadAuthFromConfig()
+        reloadClients()
       }
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' })

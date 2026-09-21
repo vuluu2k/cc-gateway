@@ -70,7 +70,7 @@ import {
   createAccount, selectAccountFor, _resetAccountsRuntime,
 } from '../src/accounts.js'
 import {
-  updateAccountRow, insertClientRow, replaceBindings,
+  updateAccountRow, insertClientRow, deleteClientRow, replaceBindings,
 } from '../src/accounts-store.js'
 
 console.log('\nrouting - selectAccountFor\n')
@@ -250,6 +250,32 @@ test('cạn hạn mức + account khác đã chết → vẫn là quota, blocked
   // and live", not "every over-limit binding".
   assert.equal(blocked.length, 1)
   assert.equal(blocked[0].accountId, 'sel-mixed-a')
+})
+
+import { reloadClients, lookupToken } from '../src/auth.js'
+
+console.log('\nauth - client nạp từ DB\n')
+
+test('lookupToken thấy client vừa thêm sau reload', () => {
+  insertClientRow({ name: 'carol', token: 'tok-carol' })
+  reloadClients()
+  const entry = lookupToken('tok-carol')
+  assert.ok(entry)
+  assert.equal(entry!.name, 'carol')
+})
+
+test('token lạ trả về null', () => {
+  assert.equal(lookupToken('khong-ton-tai'), null)
+  assert.equal(lookupToken(''), null)
+})
+
+test('client bị xoá biến mất sau reload', () => {
+  insertClientRow({ name: 'temp', token: 'tok-temp' })
+  reloadClients()
+  assert.ok(lookupToken('tok-temp'))
+  deleteClientRow('temp')
+  reloadClients()
+  assert.equal(lookupToken('tok-temp'), null)
 })
 
 console.log(`\n${passed} passed, ${failed} failed\n`)

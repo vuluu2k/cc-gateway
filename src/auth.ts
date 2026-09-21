@@ -1,31 +1,39 @@
 import type { IncomingMessage } from 'http'
-import type { Config, TokenEntry } from './config.js'
+import { listClientRows } from './accounts-store.js'
 
-const tokenMap = new Map<string, TokenEntry>()
-
-export function initAuth(config: Config) {
-  setAuthTokens(config.auth.tokens)
+export type ClientEntry = {
+  name: string
+  token: string
+  homeDir: string
 }
 
-/** Replace the in-memory token map. Call after mutating config.yaml's auth.tokens. */
-export function setAuthTokens(tokens: TokenEntry[]) {
+const tokenMap = new Map<string, ClientEntry>()
+
+/**
+ * Rebuild the token → client map from the DB.
+ *
+ * Clients used to live in config.yaml and were picked up by a 2-second
+ * watchFile poll. They are rows now, so every mutating endpoint calls this
+ * directly and changes take effect on the next request.
+ */
+export function reloadClients(): void {
   tokenMap.clear()
-  for (const entry of tokens) {
-    tokenMap.set(entry.token, entry)
+  for (const row of listClientRows()) {
+    tokenMap.set(row.token, { name: row.name, token: row.token, homeDir: row.homeDir })
   }
 }
 
-/** Look up a client entry by its raw token (used by the client self-service portal login). */
-export function lookupToken(token: string): TokenEntry | null {
+/** Look up a client by its raw token (used by the self-service portal login). */
+export function lookupToken(token: string): ClientEntry | null {
   if (!token) return null
   return tokenMap.get(token) ?? null
 }
 
 /**
  * Authenticate incoming request by Bearer token.
- * Returns the matched TokenEntry (so callers can read name + cost limit) or null.
+ * Returns the matched client or null.
  */
-export function authenticate(req: IncomingMessage): TokenEntry | null {
+export function authenticate(req: IncomingMessage): ClientEntry | null {
   // CC with ANTHROPIC_API_KEY sends x-api-key header
   const apiKey = req.headers['x-api-key']
   if (apiKey && typeof apiKey === 'string') {
