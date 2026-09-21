@@ -2862,6 +2862,19 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
     pathname.startsWith('/api/accounts/') ||
 ```
 
+- [ ] **Step 5b: XOÁ ba route `/api/oauth/*` cầu tạm, không sửa lại chúng**
+
+> **Chỉ thị của controller (từ review Task 5).** Task 5 để lại `/api/oauth/login`,
+> `/api/oauth/complete`, `/api/oauth/cancel` dùng `listAccounts()[0]` — "account tạo
+> đầu tiên", không phải "account cần đăng nhập lại". Khi đã có account thứ hai, admin
+> bấm "Re-login" cho account B đang hỏng sẽ nhận một phiên PKCE gắn vào account **A**,
+> và khi paste code xong thì **token đang chạy tốt của A bị ghi đè**, B vẫn hỏng, còn
+> UI báo thành công.
+>
+> **Xoá hẳn ba route đó.** Sửa lại chúng sẽ giữ nguyên mặc định ngầm "account đầu tiên"
+> dưới một cái tên lịch sự hơn — vẫn đúng lỗi trên. Chỉ `/api/accounts/:id/login`,
+> `/complete`, `/cancel` được tồn tại, vì chúng bắt buộc phải nêu tên account.
+
 - [ ] **Step 6: Khôi phục banner OAuth trên dashboard**
 
 > **Bổ sung của controller (2026-09-21).** Task 5 đã đổi `/_metrics` từ
@@ -2869,6 +2882,13 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
 > `#oauthBanner` đọc khoá `oauth` cũ để hiện lời nhắc "Re-login with Claude". Nó guard
 > trên giá trị falsy nên **không crash** — nhưng từ Task 5 tới đây banner im lặng không
 > bao giờ hiện nữa. Đó là hồi quy: admin mất tín hiệu duy nhất báo token đã chết.
+
+**Có HAI chỗ gọi, phải sửa cả hai** (review Task 5 xác minh):
+- `src/dashboard.ts:1460` — `renderOAuthBanner(currentData.oauth)`, `oauth` giờ `undefined`
+- `src/dashboard.ts:1563` — `renderOAuthBanner(data.status)` sau khi đăng nhập lại;
+  `proxy.ts` giờ trả `{ ok, expires_at, accounts }`, không có khoá `status`
+
+Cả hai đều guard trên falsy nên không crash, nhưng banner im lặng không bao giờ hiện.
 
 Sửa `renderOAuthBanner` (và JS đi kèm) đọc mảng `accounts` thay cho object `oauth`:
 hiện banner khi **bất kỳ** account nào có `state === 'expired'`, liệt kê tên chúng, và
