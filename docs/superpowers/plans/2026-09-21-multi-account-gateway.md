@@ -674,36 +674,20 @@ git commit -m "feat(accounts): SQLite store for accounts, clients and bindings"
   export function migrateFromConfig(config: Config): boolean  // true nếu đã migrate lần này
   ```
 
-- [ ] **Step 1: Nới lỏng `src/config.ts`**
+- [ ] **Step 1: KHÔNG đụng `src/config.ts` ở task này**
 
-Đổi ba trường trong type `Config` thành tuỳ chọn:
-
-```ts
-  auth?: {
-    tokens: TokenEntry[]
-  }
-  oauth?: {
-    access_token?: string
-    refresh_token: string
-    expires_at?: number
-  }
-```
-
-Và trong `loadConfig`, **xoá** hai khối `throw` cho `auth.tokens` và `oauth.refresh_token`, đồng thời nới lỏng kiểm tra `device_id` (nó giờ chỉ là mẫu cho account mới):
-
-```ts
-export function loadConfig(configPath?: string): Config {
-  const filePath = configPath || resolve(process.cwd(), 'config.yaml')
-  const raw = readFileSync(filePath, 'utf-8')
-  const config = parse(raw) as Config
-
-  // identity/env/prompt_env are now DEFAULTS stamped onto newly created
-  // accounts, not the live fingerprint — so a placeholder device_id is no
-  // longer fatal. Accounts carry the real one (see src/accounts-store.ts).
-  // auth.tokens and oauth are read once by the migration and never again.
-  return config
-}
-```
+> **Sửa kế hoạch (ruling của controller, 2026-09-21).** Bản đầu của task này yêu cầu nới
+> lỏng `auth`/`oauth` thành tuỳ chọn ngay tại đây. Làm vậy sẽ phá **7 chỗ gọi** đang đọc
+> chúng — `src/auth.ts:7`, `src/index.ts:68,81,93,97`, `src/proxy.ts:82,116` — khiến
+> `npx tsc --noEmit` đỏ, vi phạm ràng buộc toàn cục. Việc nới lỏng được dời đi:
+>
+> - `oauth` thành tuỳ chọn ở **Task 5**, nơi `initOAuth` (người đọc cuối cùng) bị xoá.
+> - `auth` thành tuỳ chọn ở **Task 9**, nơi client chuyển hẳn sang DB.
+>
+> Task này **không sửa `src/config.ts`**. `migrateFromConfig` đọc bằng optional chaining
+> (`config.oauth?.refresh_token`, `config.auth?.tokens || []`) — hợp lệ với TypeScript kể
+> cả khi trường chưa phải optional, nên code của bạn chạy đúng ở cả trước và sau khi hai
+> task kia nới lỏng kiểu.
 
 - [ ] **Step 2: Viết test thất bại**
 
@@ -1688,6 +1672,19 @@ Expected: PASS — 12 passed, 0 failed
 1. `rm src/oauth.ts`
 2. `src/index.ts`: bỏ import `initOAuth, setOnTokensUpdated`, bỏ khối `setOnTokensUpdated(...)` (dòng 52-54), thay `await initOAuth(config.oauth)` bằng `await initAccounts()` và bỏ biến `oauthReady` (log cảnh báo đã nằm trong `initAccounts`).
 3. `src/bootstrap-config.ts`: xoá hàm `updateConfigOAuth` — không còn ai gọi.
+3b. `src/config.ts`: giờ mới đổi `oauth` thành tuỳ chọn, vì `initOAuth` — người đọc cuối
+   cùng — vừa bị xoá:
+
+   ```ts
+     oauth?: {
+       access_token?: string
+       refresh_token: string
+       expires_at?: number
+     }
+   ```
+
+   Đồng thời xoá khối `throw` cho `oauth.refresh_token` trong `loadConfig`. **Chưa** đụng
+   `auth` — Task 9 mới làm, vì `auth.ts` và `index.ts` còn đang đọc.
 4. `src/proxy.ts`: các chỗ import từ `./oauth.js` tạm trỏ sang `./accounts.js`. `getOAuthStatus()` chưa có bản thay thế nên **tạm thời** đổi `/api/oauth` và `/_metrics` sang `{ accounts: listAccounts() }`; Task 11 sẽ hoàn thiện. `getAccessToken()` ở đường forward tạm dùng account đầu tiên khả dụng:
 
 ```ts
@@ -2429,6 +2426,33 @@ export function authenticate(req: IncomingMessage): ClientEntry | null {
   }
 
   return null
+}
+```
+
+- [ ] **Step 3b: Nới lỏng `auth` trong `src/config.ts`**
+
+Đến đây client đã nằm hẳn trong DB, nên `auth.tokens` không còn người đọc bắt buộc:
+
+```ts
+  auth?: {
+    tokens: TokenEntry[]
+  }
+```
+
+Xoá luôn khối `throw` cho `auth.tokens` rỗng, và nới lỏng kiểm tra `identity.device_id`
+(nó giờ chỉ là mẫu cho account mới, không phải danh tính đang dùng):
+
+```ts
+export function loadConfig(configPath?: string): Config {
+  const filePath = configPath || resolve(process.cwd(), 'config.yaml')
+  const raw = readFileSync(filePath, 'utf-8')
+  const config = parse(raw) as Config
+
+  // identity/env/prompt_env are now DEFAULTS stamped onto newly created
+  // accounts, not the live fingerprint - so a placeholder device_id is no
+  // longer fatal. Accounts carry the real one (see src/accounts-store.ts).
+  // auth.tokens and oauth are read once by the migration and never again.
+  return config
 }
 ```
 
