@@ -1482,7 +1482,12 @@ async function initOne(row: AccountRow): Promise<void> {
   }
 
   if (!row.refreshToken) {
-    updateAccountRow(row.id, { state: 'uninitialized' })
+    // A row already parked in `expired` (a past permanent failure) stays
+    // `expired` - it is still waiting on a re-login, not freshly created.
+    // Only a row that never had a refresh_token at all is `uninitialized`.
+    if (row.state !== 'expired') {
+      updateAccountRow(row.id, { state: 'uninitialized' })
+    }
     return
   }
 
@@ -1686,7 +1691,10 @@ Expected: PASS — 12 passed, 0 failed
 
 1. `rm src/oauth.ts`
 2. `src/index.ts`: bỏ import `initOAuth, setOnTokensUpdated`, bỏ khối `setOnTokensUpdated(...)` (dòng 52-54), thay `await initOAuth(config.oauth)` bằng `await initAccounts()` và bỏ biến `oauthReady` (log cảnh báo đã nằm trong `initAccounts`).
-3. `src/bootstrap-config.ts`: xoá hàm `updateConfigOAuth` — không còn ai gọi.
+3. `src/bootstrap-config.ts`: **không xoá hẳn** `updateConfigOAuth`. Bản đầu của kế
+   hoạch nói "không còn ai gọi" — sai: `syncOAuthFromCredentialsIfChanged` trong cùng
+   file vẫn gọi nó (`src/bootstrap-config.ts:275`). Chỉ bỏ `export` và đổi tên thành
+   `writeConfigOAuth` cho rõ là hàm nội bộ; giữ nguyên hành vi đồng bộ credentials.
 3b. `src/config.ts`: giờ mới đổi `oauth` thành tuỳ chọn, vì `initOAuth` — người đọc cuối
    cùng — vừa bị xoá:
 
@@ -2854,11 +2862,32 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
     pathname.startsWith('/api/accounts/') ||
 ```
 
-- [ ] **Step 6: Cập nhật `/_metrics`**
+- [ ] **Step 6: Khôi phục banner OAuth trên dashboard**
+
+> **Bổ sung của controller (2026-09-21).** Task 5 đã đổi `/_metrics` từ
+> `oauth: getOAuthStatus()` sang `accounts: [...]`. `src/dashboard.ts:507-509` có một
+> `#oauthBanner` đọc khoá `oauth` cũ để hiện lời nhắc "Re-login with Claude". Nó guard
+> trên giá trị falsy nên **không crash** — nhưng từ Task 5 tới đây banner im lặng không
+> bao giờ hiện nữa. Đó là hồi quy: admin mất tín hiệu duy nhất báo token đã chết.
+
+Sửa `renderOAuthBanner` (và JS đi kèm) đọc mảng `accounts` thay cho object `oauth`:
+hiện banner khi **bất kỳ** account nào có `state === 'expired'`, liệt kê tên chúng, và
+nút bấm đưa thẳng tới mục Accounts. Dùng khoá i18n `acct.stateExpired` đã có ở Task 13
+nếu Task 13 đã chạy; nếu chưa thì thêm khoá tạm `admin.oauth.someExpired` đủ ba ngôn ngữ:
+
+```ts
+  'admin.oauth.someExpired': {
+    en: 'These accounts need re-login: {names}',
+    vi: 'Các tài khoản này cần đăng nhập lại: {names}',
+    zh: '这些账户需要重新登录：{names}',
+  },
+```
+
+- [ ] **Step 7: Cập nhật `/_metrics`**
 
 Đổi `oauth: getOAuthStatus()` thành `accounts: listAccounts()`.
 
-- [ ] **Step 7: Kiểm tra bằng tay**
+- [ ] **Step 8: Kiểm tra bằng tay**
 
 ```bash
 rm -rf /tmp/ccg-api && mkdir -p /tmp/ccg-api
@@ -2878,12 +2907,12 @@ curl -s -b "ccg_session=<cookie>" -X POST localhost:8443/api/accounts/pro-1/logi
 
 Expected: lần lượt `{"accounts":[]}`, `201` với account mới, và một URL `claude.com/cai/oauth/authorize?...`. Dừng tiến trình.
 
-- [ ] **Step 8: Kiểm tra kiểu và test**
+- [ ] **Step 9: Kiểm tra kiểu và test**
 
 Run: `npx tsc --noEmit && npm test`
 Expected: sạch, mọi suite PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/proxy.ts
