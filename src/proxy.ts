@@ -6,20 +6,21 @@ import { URL } from 'url'
 import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, reloadClients } from './auth.js'
-import { listAccountRows, listClientRows } from './accounts-store.js'
+import { listAccountRows, listClientRows, listBindings } from './accounts-store.js'
 import {
   listAccounts,
-  getAccessTokenFor,
   isUsable,
   beginLogin,
   completeLogin,
   cancelLogin,
+  selectAccountFor,
 } from './accounts.js'
+import { effectiveConfigFor } from './effective-config.js'
 import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from './rewriter.js'
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { captureRateLimitHeaders } from './ratelimit.js'
@@ -116,7 +117,7 @@ async function handleRequest(
       canonical_device: config.identity.device_id.slice(0, 8) + '...',
       canonical_platform: config.env.platform,
       upstream: config.upstream.url,
-      clients: config.auth.tokens.map(t => t.name),
+      clients: listClientRows().map((c) => c.name),
     }))
     return
   }
@@ -170,48 +171,20 @@ async function handleRequest(
   }
   const clientName = tokenEntry.name
 
-  // Cost limit enforcement: only gates billable inference (/v1/messages).
-  // Health, settings, event_logging, etc. are free and shouldn't be blocked.
-  if (pathname.startsWith('/v1/messages') && tokenEntry.cost_limit_usd && tokenEntry.cost_limit_usd > 0) {
-    const since = periodStart(tokenEntry.cost_limit_period)
-    const used = getClientCostSince(clientName, since)
-    if (used >= tokenEntry.cost_limit_usd) {
-      const periodLabel = tokenEntry.cost_limit_period || 'lifetime'
-      res.writeHead(429, { 'Content-Type': 'application/json', 'x-ccg-error': 'cost-limit' })
-      res.end(JSON.stringify({
-        error: 'Cost limit reached',
-        client: clientName,
-        period: periodLabel,
-        used_usd: Number(used.toFixed(4)),
-        limit_usd: tokenEntry.cost_limit_usd,
-      }))
-      log('warn', `Client "${clientName}" blocked: ${periodLabel} cost ${used.toFixed(4)} >= limit ${tokenEntry.cost_limit_usd}`)
-      recordRequest({
-        ts: startedAt,
-        client: clientName,
-        method,
-        path: pathname,
-        status: 429,
-        durationMs: Date.now() - startedAt,
-        errorSource: 'gateway',
-        errorDetail: `cost limit reached: ${used.toFixed(4)}/${tokenEntry.cost_limit_usd} USD (${periodLabel})`,
-      })
-      if (config.logging.audit) audit(clientName, method, path, 429)
-      return
-    }
-  }
-
-  log('info', `Client "${clientName}" → ${method} ${path}`)
-
-  // Get the real OAuth token (managed by gateway)
-  // TEMPORARY - Task 7 replaces this with selectAccountFor(). It only keeps
-  // the gateway runnable between the two tasks.
-  const firstUsable = listAccounts().find((a) => isUsable(a.id))
-  const oauthToken = firstUsable ? getAccessTokenFor(firstUsable.id) : null
-  if (!oauthToken) {
-    res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'oauth-refreshing' })
-    res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
-    log('error', 'No valid OAuth token available')
+  // Account selection: only gates billable inference (/v1/messages). Health,
+  // settings, event_logging, etc. are free and shouldn't be blocked.
+  // listBindings/getAccountRow (used inside selectAccountFor) are not wrapped
+  // in try/catch, unlike getClientAccountCostSince which returns 0 on error -
+  // a DB failure here must become a clean 503, not an unhandled throw.
+  const billable = pathname.startsWith('/v1/messages')
+  let selected: ReturnType<typeof selectAccountFor>
+  try {
+    selected = selectAccountFor(clientName, billable)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    log('error', `Account selection failed for "${clientName}": ${detail}`)
+    res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'account-lookup-failed' })
+    res.end(JSON.stringify({ error: 'Account lookup failed, try again' }))
     recordRequest({
       ts: startedAt,
       client: clientName,
@@ -220,11 +193,71 @@ async function handleRequest(
       status: 503,
       durationMs: Date.now() - startedAt,
       errorSource: 'gateway',
-      errorDetail: 'oauth token unavailable (refreshing)',
+      errorDetail: `account lookup failed: ${detail}`,
     })
     if (config.logging.audit) audit(clientName, method, path, 503)
     return
   }
+
+  if (!selected.ok) {
+    const status = selected.reason === 'quota' ? 429 : 503
+    const payload =
+      selected.reason === 'quota'
+        ? {
+            error: 'Cost limit reached on every account',
+            client: clientName,
+            accounts: selected.blocked.map((b) => ({
+              account: b.accountId,
+              period: b.limitPeriod,
+              used_usd: Number(b.usedUsd.toFixed(4)),
+              limit_usd: b.limitUsd,
+            })),
+          }
+        : selected.reason === 'no-bindings'
+          ? {
+              error: 'No upstream account assigned to this client',
+              client: clientName,
+              hint: 'Assign one from the admin dashboard → Clients → Accounts',
+            }
+          : {
+              error: 'No usable upstream account',
+              client: clientName,
+              hint: 'Every assigned account is disabled or needs re-login',
+            }
+
+    const detail =
+      selected.reason === 'quota'
+        ? `cost limit reached on all ${selected.blocked.length} account(s)`
+        : selected.reason === 'no-bindings'
+          ? 'client has no account bindings'
+          : 'no usable account'
+
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'x-ccg-error': selected.reason === 'quota' ? 'cost-limit' : 'no-account',
+    })
+    res.end(JSON.stringify(payload))
+    log('warn', `Client "${clientName}" blocked: ${detail}`)
+    recordRequest({
+      ts: startedAt,
+      client: clientName,
+      method,
+      path: pathname,
+      status,
+      durationMs: Date.now() - startedAt,
+      errorSource: 'gateway',
+      errorDetail: detail,
+    })
+    if (config.logging.audit) audit(clientName, method, path, status)
+    return
+  }
+
+  const accountId = selected.accountId
+  // Identity/env for THIS request belong to the chosen account, not the gateway.
+  const reqConfig = effectiveConfigFor(config, selected.row)
+  const oauthToken = selected.accessToken
+
+  log('info', `Client "${clientName}" → ${method} ${path}`)
 
   // Collect request body
   const chunks: Buffer[] = []
@@ -247,14 +280,14 @@ async function handleRequest(
   // file tool calls still hit real paths instead of the canonical /Users/jack.
   const reversePairs =
     body.length > 0 && pathname.startsWith('/v1/messages')
-      ? extractReversePathMap(body, config, tokenEntry.home_dir)
+      ? extractReversePathMap(body, reqConfig, tokenEntry.homeDir)
       : []
 
   // Rewrite identity fields in body
   const rewriteInfo: RewriteInfo = {}
   if (body.length > 0) {
     try {
-      body = rewriteBody(body, path, config, rewriteInfo) as Buffer<ArrayBuffer>
+      body = rewriteBody(body, path, reqConfig, rewriteInfo) as Buffer<ArrayBuffer>
     } catch (err) {
       log('error', `Body rewrite failed for ${path}: ${err}`)
     }
@@ -263,7 +296,7 @@ async function handleRequest(
   // Rewrite headers (strips client auth, normalizes identity headers)
   const rewrittenHeaders = rewriteHeaders(
     req.headers as Record<string, string | string[] | undefined>,
-    config,
+    reqConfig,
   )
 
   // Inject the OAuth access_token. Anthropic OAuth tokens (sk-ant-oat01-) must
@@ -371,6 +404,7 @@ async function handleRequest(
         recordRequest({
           ts: startedAt,
           client: clientName,
+          accountId,
           method,
           path: pathname,
           status,
@@ -556,6 +590,7 @@ async function handleRequest(
     recordRequest({
       ts: startedAt,
       client: clientName,
+      accountId,
       method,
       path: pathname,
       status: 502,
@@ -1294,6 +1329,15 @@ async function handlePortalArea(
     const used = getClientCostSince(client.name, periodStart(client.cost_limit_period))
     const profile = getClientProfile(client.name)
     const credMeta = getClientCredentialMeta(client.name)
+    // Per-account quota, replacing the single client-wide limit the "Account"
+    // card used to show — routing now spends against the client's bound
+    // accounts, each with its own limit/period.
+    const quotas = listBindings(client.name).map((b) => ({
+      account: b.accountId,
+      period: b.limitPeriod,
+      limit_usd: b.limitUsd,
+      used_usd: Number(getClientAccountCostSince(client.name, b.accountId, periodStart(b.limitPeriod)).toFixed(4)),
+    }))
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({
       name: client.name,
@@ -1304,9 +1348,8 @@ async function handlePortalArea(
       account: {
         created_at: credMeta?.created_at ?? null,
         password_updated_at: credMeta?.updated_at ?? null,
-        cost_limit_usd: limit,
-        cost_limit_period: period,
       },
+      quotas,
       credit: {
         limit_usd: limit,
         period,

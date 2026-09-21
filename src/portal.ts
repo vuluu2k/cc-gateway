@@ -240,7 +240,7 @@ ${SHARED_HEAD_STYLE}
         <h3 data-i18n="portal.account.h">Account</h3>
         <div class="kv">
           <div class="k" data-i18n="portal.account.name">Client name</div><div class="v" id="acName">—</div>
-          <div class="k" data-i18n="portal.account.plan">Plan / limit</div><div class="v" id="acPlan">—</div>
+          <div class="k" data-i18n="portal.quotaPerAccount">Quota per account</div><div class="v" id="acPlan">—</div>
           <div class="k" data-i18n="portal.account.since">Member since</div><div class="v" id="acSince">—</div>
           <div class="k" data-i18n="portal.account.pwSet">Password set</div><div class="v" id="acPwUpdated">—</div>
         </div>
@@ -444,10 +444,13 @@ ${SHARED_HEAD_STYLE}
 
     // Account
     const a = d.account || {};
+    const quotas = d.quotas || [];
     document.getElementById('acName').textContent = d.name;
-    document.getElementById('acPlan').textContent = a.cost_limit_usd == null
-      ? t('portal.credit.unlimited')
-      : fmtCost(a.cost_limit_usd) + ' / ' + periodLabel(a.cost_limit_period || 'lifetime');
+    document.getElementById('acPlan').innerHTML = quotas.length
+      ? quotas.map((q) => '<div>' + esc(q.account) + ': ' + (q.limit_usd > 0
+          ? fmtCost(q.used_usd) + ' / ' + fmtCost(q.limit_usd) + ' (' + periodLabel(q.period) + ')'
+          : esc(t('portal.credit.unlimited'))) + '</div>').join('')
+      : '<span class="muted">' + esc(t('portal.account.noQuota')) + '</span>';
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
 
