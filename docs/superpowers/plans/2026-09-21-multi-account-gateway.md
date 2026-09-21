@@ -3540,6 +3540,66 @@ Khoá i18n mới, đủ ba ngôn ngữ:
   'setup.badCode': { en: 'Wrong setup code', vi: 'Mã cài đặt không đúng', zh: '设置码不正确' },
 ```
 
+- [ ] **Step 3c: Làm `migrateFromConfig` chịu được config.yaml trùng tên client**
+
+> **Bổ sung của controller (ruling, 2026-09-21).** Review Task 3 phát hiện: nếu
+> `auth.tokens` cũ có hai entry trùng `name` (hoặc trùng `token`), `insertClientRow`
+> đụng ràng buộc PRIMARY KEY / UNIQUE và ném lỗi. Transaction rollback nên **không**
+> để lại DB nửa vời — tốt. Nhưng bước tiếp theo mới là vấn đề: lời gọi nằm trong khối
+> `try` của `src/index.ts`, mà khối đó kết thúc bằng `process.exit(1)`. Bảng `accounts`
+> vẫn rỗng nên lần khởi động sau migration lại chạy lại, lại ném, lại thoát —
+> **container crash-loop, và admin không vào nổi dashboard để sửa.**
+>
+> Đó đúng là kịch bản hỏng mà cả dự án này sinh ra để diệt, nên không được để nguyên.
+
+Trong `src/migrate-accounts.ts`, bỏ qua entry trùng thay vì ném:
+
+```ts
+    const seen = new Set<string>()
+    for (const entry of tokens) {
+      // A hand-edited config.yaml can carry the same client twice. Skipping the
+      // duplicate keeps the gateway bootable; throwing here would crash-loop the
+      // container with the admin locked out of the dashboard.
+      if (!entry.name || seen.has(entry.name)) {
+        log('warn', `Migration: skipping duplicate or unnamed client "${entry.name}"`)
+        continue
+      }
+      seen.add(entry.name)
+      insertClientRow({ name: entry.name, token: entry.token, homeDir: entry.home_dir })
+      replaceBindings(entry.name, [
+        {
+          accountId: LEGACY_ACCOUNT_ID,
+          priority: 0,
+          limitUsd: entry.cost_limit_usd || 0,
+          limitPeriod: (entry.cost_limit_period || 'lifetime') as LimitPeriod,
+        },
+      ])
+    }
+```
+
+Thêm test vào `tests/migration.test.ts`:
+
+```ts
+test('config trùng tên client thì bỏ qua bản sau, không ném', () => {
+  const dir3 = mkdtempSync(join(tmpdir(), 'ccg-test-'))
+  initDb(join(dir3, 'dup.db'))
+  const dupConfig = {
+    oauth: { refresh_token: 'ref-dup' },
+    auth: {
+      tokens: [
+        { name: 'alice', token: 'tok-1' },
+        { name: 'alice', token: 'tok-2' },
+      ],
+    },
+    identity: { device_id: 'ef'.repeat(32), email: 'dup@example.com' },
+  } as unknown as Config
+  assert.doesNotThrow(() => migrateFromConfig(dupConfig))
+  assert.equal(listClientRows().length, 1)
+  assert.equal(listAccountRows().length, 1)
+  rmSync(dir3, { recursive: true, force: true })
+})
+```
+
 - [ ] **Step 4: Nối thứ tự khởi động trong `src/index.ts`**
 
 ```ts
