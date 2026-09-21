@@ -1,14 +1,15 @@
 import { log } from './logger.js'
 import {
   listAccountRows, getAccountRow, insertAccountRow, updateAccountRow,
-  deleteAccountRow, listBindingsForAccount,
+  deleteAccountRow, listBindingsForAccount, listBindings,
 } from './accounts-store.js'
-import type { AccountRow, AccountState } from './accounts-store.js'
+import type { AccountRow, AccountState, LimitPeriod } from './accounts-store.js'
 import {
   refreshOAuthToken, beginOAuthLogin, completeOAuthLogin,
   OAuthPermanentError, LOGIN_TTL_MS,
 } from './oauth-client.js'
 import type { OAuthTokens, PendingLogin } from './oauth-client.js'
+import { getClientAccountCostSince, periodStart } from './metrics.js'
 
 const FIVE_MINUTES = 5 * 60 * 1000
 
@@ -358,3 +359,66 @@ export async function completeLogin(
 }
 
 export { LOGIN_TTL_MS }
+
+export type BlockedBinding = {
+  accountId: string
+  usedUsd: number
+  limitUsd: number
+  limitPeriod: LimitPeriod
+}
+
+export type SelectResult =
+  | { ok: true; accountId: string; accessToken: string; row: AccountRow }
+  | { ok: false; reason: 'no-bindings' }
+  | { ok: false; reason: 'quota'; blocked: BlockedBinding[] }
+  | { ok: false; reason: 'unavailable' }
+
+/**
+ * Pick the account a client's next request should spend against.
+ *
+ * Walks the client's bindings in priority order (lower first) and takes the
+ * first one that is both alive and still inside its quota. There is no failover
+ * on upstream errors — a 429/401 from the API surfaces to the client, and the
+ * dead account only drops out on the NEXT call, once its state has been updated.
+ *
+ * `billable` is false for the free endpoints (settings, event logging, …), which
+ * must not be gated on a spending limit.
+ */
+export function selectAccountFor(clientName: string, billable: boolean): SelectResult {
+  const bindings = listBindings(clientName)
+  if (bindings.length === 0) return { ok: false, reason: 'no-bindings' }
+
+  const blocked: BlockedBinding[] = []
+
+  for (const binding of bindings) {
+    const row = getAccountRow(binding.accountId)
+    if (!row) continue
+
+    const accessToken = getAccessTokenFor(binding.accountId)
+    if (!accessToken) continue
+
+    if (billable && binding.limitUsd > 0) {
+      const used = getClientAccountCostSince(
+        clientName,
+        binding.accountId,
+        periodStart(binding.limitPeriod),
+      )
+      if (used >= binding.limitUsd) {
+        blocked.push({
+          accountId: binding.accountId,
+          usedUsd: used,
+          limitUsd: binding.limitUsd,
+          limitPeriod: binding.limitPeriod,
+        })
+        continue
+      }
+    }
+
+    return { ok: true, accountId: binding.accountId, accessToken, row }
+  }
+
+  // Quota wins over availability in the report: a client that burned through
+  // every limit needs a different message than one whose accounts all died.
+  if (blocked.length > 0) return { ok: false, reason: 'quota', blocked }
+  return { ok: false, reason: 'unavailable' }
+}
