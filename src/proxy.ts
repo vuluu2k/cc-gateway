@@ -774,8 +774,16 @@ async function handleDashboardArea(
       return
     }
     // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    // Until then a re-login always targets the first configured account.
-    const target = listAccounts()[0]
+    // Until then a re-login always targets the first configured account. With
+    // more than one account that guess can silently target the wrong one, so
+    // refuse rather than mis-target once a second account exists.
+    const loginAccounts = listAccounts()
+    if (loginAccounts.length > 1) {
+      res.writeHead(409, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
+      return
+    }
+    const target = loginAccounts[0]
     if (!target) {
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'No accounts configured' }))
@@ -817,8 +825,17 @@ async function handleDashboardArea(
       return
     }
     // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    // Until then a re-login always targets the first configured account.
-    const target = listAccounts()[0]
+    // Until then a re-login always targets the first configured account. With
+    // more than one account that guess can silently overwrite a healthy
+    // account's tokens instead of fixing the broken one, so refuse rather
+    // than mis-target once a second account exists.
+    const completeAccounts = listAccounts()
+    if (completeAccounts.length > 1) {
+      res.writeHead(409, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
+      return
+    }
+    const target = completeAccounts[0]
     if (!target) {
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'No accounts configured' }))
@@ -845,7 +862,13 @@ async function handleDashboardArea(
       return
     }
     // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    const target = listAccounts()[0]
+    const cancelAccounts = listAccounts()
+    if (cancelAccounts.length > 1) {
+      res.writeHead(409, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
+      return
+    }
+    const target = cancelAccounts[0]
     if (target) cancelLogin(target.id)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))

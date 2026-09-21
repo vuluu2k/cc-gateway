@@ -102,6 +102,32 @@ await test('account bị tắt thì không dùng được dù token còn hạn',
   assert.equal(isUsable('pro-1'), true)
 })
 
+await test('bật lại account đã tắt sẽ chạy lại initOne, không giữ state cũ', () => {
+  // Regression for: re-enabling an account never re-armed its refresh timer
+  // or re-derived its state — it just kept whatever `state` was written
+  // before it got disabled, forever.
+  createAccount({ id: 'pro-3' })
+  updateAccountRow('pro-3', {
+    accessToken: 'stale-token',
+    refreshToken: 'refresh-3',
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    state: 'ok',
+  })
+  updateAccount('pro-3', { enabled: false })
+  // While disabled, its refresh_token disappears and its access token goes
+  // stale (e.g. it sat disabled long enough to expire) — but the row still
+  // reads the 'ok' state written before it was disabled, since disabling
+  // never re-derives state.
+  updateAccountRow('pro-3', { refreshToken: '', expiresAt: Date.now() - 1000 })
+  updateAccount('pro-3', { enabled: true })
+  // Re-enabling must re-run initOne's decision: no refresh_token and an
+  // expired access token means this account is actually uninitialized, not
+  // still 'ok'. Before the fix, re-enable did nothing and this stayed stuck
+  // reporting 'ok' — a healthy-looking account with no way to ever refresh.
+  assert.equal(getAccountView('pro-3')!.state, 'uninitialized')
+  deleteAccount('pro-3')
+})
+
 await test('beginLogin đánh dấu loginPending, cancelLogin gỡ ra', () => {
   const started = beginLogin('pro-2')
   assert.ok(started.url.startsWith('https://claude.com/cai/oauth/authorize'))
@@ -127,6 +153,10 @@ await test('deleteAccount chạy khi không còn binding', () => {
   assert.equal(listAccounts().length, 1)
 })
 
+// Re-enabling an account now re-arms its refresh timer (see the "bật lại
+// account" test above), so a live setTimeout can still be outstanding here —
+// clear everything before exit or the process hangs instead of finishing.
+_resetAccountsRuntime()
 rmSync(dir, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exit(1)

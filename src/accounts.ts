@@ -27,11 +27,16 @@ export type AccountView = {
   enabled: boolean
   hasRefreshToken: boolean
   loginPending: boolean
+  // When the REFRESH token itself expires, if the server told us. In-memory
+  // only (mirrors the old oauth.ts module variable) — never persisted to the
+  // DB, so it resets on restart.
+  refreshTokenExpiresAt: number | null
 }
 
 type Runtime = {
   refreshTimer: NodeJS.Timeout | null
   failureCount: number
+  refreshTokenExpiresAt: number | null
 }
 
 // One runtime slot per account. Timers live here, not in the DB, so a crashed
@@ -43,7 +48,7 @@ let missingTokenLoggedAt = new Map<string, number>()
 function runtimeOf(id: string): Runtime {
   let rt = runtimes.get(id)
   if (!rt) {
-    rt = { refreshTimer: null, failureCount: 0 }
+    rt = { refreshTimer: null, failureCount: 0, refreshTokenExpiresAt: null }
     runtimes.set(id, rt)
   }
   return rt
@@ -73,6 +78,7 @@ function toView(row: AccountRow): AccountView {
     enabled: row.enabled,
     hasRefreshToken: row.refreshToken !== '',
     loginPending: pending !== undefined && pending.expiresAt > Date.now(),
+    refreshTokenExpiresAt: runtimes.get(row.id)?.refreshTokenExpiresAt ?? null,
   }
 }
 
@@ -99,7 +105,10 @@ export async function initAccounts(): Promise<void> {
     return
   }
 
-  await Promise.all(rows.filter((r) => r.enabled).map((row) => initOne(row)))
+  // allSettled, not all: initAccounts must never throw even if some unforeseen
+  // path inside initOne rejects — the never-throws guarantee has to be
+  // structural, not contingent on every internal path staying clean.
+  await Promise.allSettled(rows.filter((r) => r.enabled).map((row) => initOne(row)))
 
   const usable = rows.filter((r) => isUsable(r.id)).length
   log('info', `Accounts ready: ${usable}/${rows.length} usable`)
@@ -132,7 +141,11 @@ function scheduleRefresh(id: string, expiresAt: number) {
   clearTimerFor(id)
   const refreshIn = Math.max(expiresAt - Date.now() - FIVE_MINUTES, 10_000)
   runtimeOf(id).refreshTimer = setTimeout(() => {
-    void runRefresh(id)
+    // .catch, not void: an uncaught rejection here is an unhandled promise
+    // rejection, and Node kills the whole process on those.
+    runRefresh(id).catch((err) => {
+      log('error', `Account "${id}" refresh crashed: ${err instanceof Error ? err.message : err}`)
+    })
   }, refreshIn)
 }
 
@@ -158,6 +171,8 @@ async function runRefresh(id: string): Promise<void> {
 }
 
 function persist(id: string, tokens: OAuthTokens) {
+  // In-memory only, like the rest of Runtime — see the AccountView field doc.
+  runtimeOf(id).refreshTokenExpiresAt = tokens.refreshTokenExpiresAt ?? null
   updateAccountRow(id, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
@@ -172,6 +187,13 @@ function persist(id: string, tokens: OAuthTokens) {
  * A permanent failure (invalid_grant) means this account's refresh_token is
  * gone for good — park it in `expired` and stop retrying. Anything else backs
  * off and tries again. Either way, only this account is affected.
+ *
+ * Both branches guard their own DB write: this runs inside runRefresh's only
+ * catch block, so a throw here (e.g. the account was deleted mid-refresh, or
+ * a transient DB error like SQLITE_BUSY) would otherwise escape uncaught and
+ * take the whole process down — exactly the crash-loop this project exists
+ * to eliminate. On a write failure we log and give up on this cycle rather
+ * than re-arm a timer for an account that may no longer exist.
  */
 function handleRefreshFailure(id: string, err: unknown) {
   const message = err instanceof Error ? err.message : String(err)
@@ -179,20 +201,32 @@ function handleRefreshFailure(id: string, err: unknown) {
   rt.failureCount++
 
   if (err instanceof OAuthPermanentError) {
-    updateAccountRow(id, { state: 'expired', lastError: message })
+    try {
+      updateAccountRow(id, { state: 'expired', lastError: message })
+    } catch (writeErr) {
+      log('error', `Account "${id}": could not record permanent refresh failure: ${writeErr instanceof Error ? writeErr.message : writeErr}`)
+      return
+    }
     clearTimerFor(id)
     log('error', `Account "${id}" refresh_token is no longer valid: ${message}`)
     log('error', `  Re-login from the admin dashboard → Accounts → "${id}".`)
     return
   }
 
-  updateAccountRow(id, { state: 'refreshing', lastError: message })
+  try {
+    updateAccountRow(id, { state: 'refreshing', lastError: message })
+  } catch (writeErr) {
+    log('error', `Account "${id}": could not record refresh failure: ${writeErr instanceof Error ? writeErr.message : writeErr}`)
+    return
+  }
   // 30s, 60s, 2m, 4m, … capped at 10 minutes.
   const delay = Math.min(30_000 * 2 ** (rt.failureCount - 1), 10 * 60_000)
   log('error', `Account "${id}" refresh failed (attempt ${rt.failureCount}): ${message}. Retrying in ${Math.round(delay / 1000)}s`)
   clearTimerFor(id)
   rt.refreshTimer = setTimeout(() => {
-    void runRefresh(id)
+    runRefresh(id).catch((retryErr) => {
+      log('error', `Account "${id}" refresh crashed: ${retryErr instanceof Error ? retryErr.message : retryErr}`)
+    })
   }, delay)
 }
 
@@ -216,6 +250,9 @@ export function createAccount(input: {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(input.id)) {
     throw new Error('Account id must be 1-64 chars: letters, digits or dashes')
   }
+  if (input.deviceId && !/^[0-9a-f]{64}$/i.test(input.deviceId)) {
+    throw new Error('deviceId must be exactly 64 hex characters')
+  }
   if (getAccountRow(input.id)) {
     throw new Error(`Account "${input.id}" already exists`)
   }
@@ -232,8 +269,19 @@ export function updateAccount(
     promptEnv?: Record<string, unknown> | null
   },
 ): AccountView {
+  const wasEnabled = getAccountRow(id)?.enabled
   const row = updateAccountRow(id, patch)
   if (patch.enabled === false) clearTimerFor(id)
+  if (patch.enabled === true && !wasEnabled) {
+    // Re-run the same startup decision initAccounts made: schedule a refresh
+    // if the cached token is still good, refresh now if not, or park
+    // uninitialized. Without this a re-enabled account keeps serving its
+    // cached token with no timer armed, then goes silently, permanently dead
+    // the moment that token expires.
+    initOne(row).catch((err) => {
+      log('error', `Account "${id}": re-enable init failed: ${err instanceof Error ? err.message : err}`)
+    })
+  }
   return toView(row)
 }
 
