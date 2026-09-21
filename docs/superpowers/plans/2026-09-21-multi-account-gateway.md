@@ -1050,11 +1050,13 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: CLIENT_ID,
+    // Keep this: src/oauth.ts sends it, and this flow is reverse-engineered
+    // from the real Claude Code CLI. Do not drift from the CLI's request body.
+    scope: DEFAULT_SCOPES.join(' '),
   })
   if (res.status !== 200 || !res.data) {
-    const message = describeFailure(res)
-    if (isPermanent(res)) throw new OAuthPermanentError(message)
-    throw new Error(message)
+    const message = `OAuth refresh failed (${describeFailure(res)})`
+    throw isPermanent(res) ? new OAuthPermanentError(message) : new Error(message)
   }
   return tokensFromResponse(res.data, refreshToken)
 }
