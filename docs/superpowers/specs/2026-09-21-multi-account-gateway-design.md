@@ -131,6 +131,11 @@ Tách làm hai file:
 Chuyển nguyên xi phần HTTP hiện có, chỉ bỏ biến global:
 
 ```ts
+export type OAuthTokens = {
+  accessToken: string; refreshToken: string; expiresAt: number
+  refreshTokenExpiresAt?: number   // trả ra cho caller, module không giữ state
+}
+
 export function refreshOAuthToken(refreshToken: string): Promise<OAuthTokens>
 export function beginOAuthLogin(): { url: string; verifier: string; state: string; expiresAt: number }
 export function completeOAuthLogin(pasted: string, pending: PendingLogin): Promise<OAuthTokens>
@@ -152,6 +157,10 @@ type AccountRuntime = {
   lastRefreshAt: number | null
   refreshTimer: NodeJS.Timeout | null
   failureCount: number
+  // Khi refresh_token TỰ NÓ hết hạn. Chỉ trong bộ nhớ, reset khi khởi động lại —
+  // giữ đúng hành vi của biến module `refreshTokenExpiresAt` trong oauth.ts cũ,
+  // vốn chưa bao giờ được ghi xuống config.yaml.
+  refreshTokenExpiresAt: number | null
 }
 
 export async function initAccounts(defaults: IdentityDefaults): Promise<void>

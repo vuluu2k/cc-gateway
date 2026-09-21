@@ -910,7 +910,10 @@ git commit -m "feat(accounts): one-way migration from single-account config.yaml
 - Consumes: `getProxyAgent()` từ `src/proxy-agent.ts`, `log` từ `src/logger.ts`
 - Produces:
   ```ts
-  export type OAuthTokens = { accessToken: string; refreshToken: string; expiresAt: number }
+  export type OAuthTokens = {
+    accessToken: string; refreshToken: string; expiresAt: number
+    refreshTokenExpiresAt?: number   // trả ra cho caller, KHÔNG giữ trong module
+  }
   export type PendingLogin = { verifier: string; state: string; expiresAt: number }
 
   export class OAuthPermanentError extends Error {}
@@ -1182,6 +1185,7 @@ git commit -m "refactor(oauth): extract stateless oauth-client from oauth.ts"
     env: Record<string, unknown> | null
     promptEnv: Record<string, unknown> | null
     enabled: boolean; hasRefreshToken: boolean; loginPending: boolean
+    refreshTokenExpiresAt: number | null
   }
 
   export async function initAccounts(): Promise<void>
@@ -1382,11 +1386,16 @@ export type AccountView = {
   enabled: boolean
   hasRefreshToken: boolean
   loginPending: boolean
+  // In-memory only, per process - see Runtime above.
+  refreshTokenExpiresAt: number | null
 }
 
 type Runtime = {
   refreshTimer: NodeJS.Timeout | null
   failureCount: number
+  // When the REFRESH token itself expires. In-memory only and reset on restart,
+  // exactly as the old oauth.ts module variable behaved. Null when unknown.
+  refreshTokenExpiresAt: number | null
 }
 
 // One runtime slot per account. Timers live here, not in the DB, so a crashed
@@ -1398,7 +1407,7 @@ let missingTokenLoggedAt = new Map<string, number>()
 function runtimeOf(id: string): Runtime {
   let rt = runtimes.get(id)
   if (!rt) {
-    rt = { refreshTimer: null, failureCount: 0 }
+    rt = { refreshTimer: null, failureCount: 0, refreshTokenExpiresAt: null }
     runtimes.set(id, rt)
   }
   return rt
@@ -1428,6 +1437,7 @@ function toView(row: AccountRow): AccountView {
     enabled: row.enabled,
     hasRefreshToken: row.refreshToken !== '',
     loginPending: pending !== undefined && pending.expiresAt > Date.now(),
+    refreshTokenExpiresAt: runtimes.get(row.id)?.refreshTokenExpiresAt ?? null,
   }
 }
 
@@ -1508,6 +1518,9 @@ async function runRefresh(id: string): Promise<void> {
 }
 
 function persist(id: string, tokens: OAuthTokens) {
+  if (tokens.refreshTokenExpiresAt !== undefined) {
+    runtimeOf(id).refreshTokenExpiresAt = tokens.refreshTokenExpiresAt
+  }
   updateAccountRow(id, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
