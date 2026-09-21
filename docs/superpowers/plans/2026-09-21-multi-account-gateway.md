@@ -2781,6 +2781,45 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
       res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
     }
 
+    // Only these five fields may be patched. `updateAccountRow` whitelists by
+    // column name, and that whitelist includes refresh_token, access_token,
+    // state and device_id - so handing it a raw JSON body would let an admin
+    // overwrite an account's live tokens through the settings form.
+    // Values inside env/prompt_env must be primitives: they are spread into
+    // Config.env, which rewriter.ts reads as string | boolean | number, and a
+    // nested object would reach the outgoing request fingerprint unchecked.
+    const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv'] as const
+
+    function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
+      if (!raw || typeof raw !== 'object') throw new Error('Body must be a JSON object')
+      const src = raw as Record<string, unknown>
+      const out: Record<string, unknown> = {}
+      for (const key of ACCOUNT_PATCHABLE) {
+        if (!(key in src)) continue
+        const value = src[key]
+        if (key === 'enabled') {
+          if (typeof value !== 'boolean') throw new Error('enabled must be a boolean')
+          out[key] = value
+        } else if (key === 'env' || key === 'promptEnv') {
+          if (value === null) { out[key] = null; continue }
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new Error(`${key} must be an object or null`)
+          }
+          for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+            const t = typeof v
+            if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+              throw new Error(`${key}.${k} must be a string, number or boolean`)
+            }
+          }
+          out[key] = value
+        } else {
+          if (typeof value !== 'string') throw new Error(`${key} must be a string`)
+          out[key] = value
+        }
+      }
+      return out
+    }
+
     if (!action && method === 'PATCH') {
       let body: Buffer
       try {
@@ -2789,7 +2828,7 @@ Thay khối `if (pathname === '/api/oauth')` bằng:
         return fail(413, new Error('Payload too large'))
       }
       try {
-        const patch = JSON.parse(body.toString('utf-8'))
+        const patch = sanitizeAccountPatch(JSON.parse(body.toString('utf-8')))
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(updateAccount(id, patch)))
       } catch (err) {
