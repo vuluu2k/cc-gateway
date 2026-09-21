@@ -39,7 +39,7 @@ import { join } from 'path'
 const dir = mkdtempSync(join(tmpdir(), 'ccg-test-'))
 const dbPath = join(dir, 'test.db')
 // ... initDb(dbPath) ...
-// cuối file: rmSync(dir, { recursive: true, force: true })
+// at end of file: rmSync(dir, { recursive: true, force: true })
 ```
 
 ## File Structure
@@ -127,8 +127,8 @@ test('request_metrics có cột account_id mặc định rỗng', () => {
 
 test('client_accounts cascade khi xoá client', () => {
   const db = getDb()
-  // Tham số hoá device_id: SQLite không chạy `.repeat()` của JavaScript bên
-  // trong chuỗi SQL.
+  // Bind device_id as a parameter: SQLite parses SQL, it does not run
+  // JavaScript, so `.repeat()` inside a SQL string is a syntax error.
   db.prepare(
     'INSERT INTO accounts (id, device_id, created_at) VALUES (?, ?, ?)',
   ).run('a1', 'ab'.repeat(32), 0)
@@ -146,7 +146,7 @@ test('client_accounts cascade khi xoá client', () => {
 })
 
 test('chạy migrate hai lần không lỗi', () => {
-  // initDb gọi migrate; gọi lại trên cùng file phải im lặng thành công
+  // initDb runs migrate; calling it again on the same file must be a silent no-op
   initDb(join(dir, 'test.db'))
   const names = (getDb()
     .prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -734,7 +734,7 @@ const legacyConfig = {
 
 console.log('\nmigration - config.yaml → DB\n')
 
-// Một bản ghi metrics cũ, chưa có account_id.
+// A legacy metrics row, written before account_id existed.
 getDb()
   .prepare(
     `INSERT INTO request_metrics (ts, client, method, path, status, duration_ms)
@@ -985,7 +985,7 @@ test('URL mang đủ tham số PKCE', () => {
   assert.equal(parsed.searchParams.get('code_challenge_method'), 'S256')
   assert.equal(parsed.searchParams.get('state'), pending.state)
   assert.ok(parsed.searchParams.get('code_challenge'))
-  // challenge phải là bản băm, không phải verifier trần
+  // the challenge must be the hash, never the raw verifier
   assert.notEqual(parsed.searchParams.get('code_challenge'), pending.verifier)
 })
 
@@ -1319,7 +1319,7 @@ await test('beginLogin đánh dấu loginPending, cancelLogin gỡ ra', () => {
   const started = beginLogin('pro-2')
   assert.ok(started.url.startsWith('https://claude.com/cai/oauth/authorize'))
   assert.equal(getAccountView('pro-2')!.loginPending, true)
-  // login của pro-2 không được lẫn sang pro-1
+  // pro-2's pending login must not leak into pro-1
   assert.equal(getAccountView('pro-1')!.loginPending, false)
   cancelLogin('pro-2')
   assert.equal(getAccountView('pro-2')!.loginPending, false)
@@ -1688,8 +1688,8 @@ Expected: PASS — 12 passed, 0 failed
 4. `src/proxy.ts`: các chỗ import từ `./oauth.js` tạm trỏ sang `./accounts.js`. `getOAuthStatus()` chưa có bản thay thế nên **tạm thời** đổi `/api/oauth` và `/_metrics` sang `{ accounts: listAccounts() }`; Task 11 sẽ hoàn thiện. `getAccessToken()` ở đường forward tạm dùng account đầu tiên khả dụng:
 
 ```ts
-// TẠM THỜI — Task 7 thay bằng selectAccountFor(). Giữ gateway chạy được
-// giữa hai task.
+// TEMPORARY - Task 7 replaces this with selectAccountFor(). It only keeps
+// the gateway runnable between the two tasks.
 const firstUsable = listAccounts().find((a) => isUsable(a.id))
 const accessToken = firstUsable ? getAccessTokenFor(firstUsable.id) : null
 ```
@@ -1723,7 +1723,7 @@ git commit -m "feat(accounts): per-account OAuth runtime, retire oauth.ts single
 - Consumes: `getDb()`, `periodStart()` (đã có trong `src/metrics.ts`)
 - Produces:
   ```ts
-  // RequestRecord thêm: accountId?: string
+  // RequestRecord gains: accountId?: string
   export function getClientAccountCostSince(client: string, accountId: string, sinceTs: number): number
   ```
 
@@ -1836,7 +1836,7 @@ Trong `recordRequest`, thêm `account_id` vào danh sách cột, thêm một `?`
       )
       .run(
         rec.ts, rec.client, rec.accountId || '', rec.method, rec.path, rec.status, rec.durationMs,
-        // ... phần còn lại giữ nguyên
+        // ... the remaining arguments stay as they are
 ```
 
 Thêm hàm mới ngay sau `getClientCostSince`:
@@ -2025,7 +2025,7 @@ test('hạn mức hết hạn theo chu kỳ: daily tính lại từ đầu ngày
   replaceBindings('erin', [
     { accountId: 'acc-b', priority: 1, limitUsd: 1, limitPeriod: 'daily' },
   ])
-  // Một khoản chi của hôm qua không được tính vào hạn mức hôm nay.
+  // Yesterday's spend must not count against today's daily limit.
   recordRequest({
     ts: Date.now() - 48 * HOUR,
     client: 'erin',
