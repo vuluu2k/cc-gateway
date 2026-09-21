@@ -73,6 +73,11 @@ test('email rỗng của account thì giữ email gốc', () => {
   assert.equal(cfg.identity.email, 'base@example.com')
 })
 
+test('deviceId rỗng của account thì giữ deviceId gốc', () => {
+  const cfg = effectiveConfigFor(base, account({ deviceId: '' }))
+  assert.equal(cfg.identity.device_id, 'ba'.repeat(32))
+})
+
 test('hai account cho ra hai config khác nhau', () => {
   const a = effectiveConfigFor(base, account({ deviceId: '11'.repeat(32) }))
   const b = effectiveConfigFor(base, account({ deviceId: '22'.repeat(32) }))
