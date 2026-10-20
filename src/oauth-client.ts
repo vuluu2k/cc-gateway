@@ -55,11 +55,11 @@ type TokenResponse = {
  * as an uncaughtException and kill the process. A non-JSON body (an upstream
  * HTML error page, a captive-portal interstitial) is reported, not parsed.
  */
-function postToken(body: Record<string, unknown>): Promise<TokenResponse> {
+function postToken(body: Record<string, unknown>, proxyUrl?: string): Promise<TokenResponse> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body)
     const url = new URL(TOKEN_URL)
-    const agent = getProxyAgent()
+    const agent = getProxyAgent(proxyUrl)
     let settled = false
     const fail = (err: Error) => {
       if (settled) return
@@ -153,7 +153,10 @@ function b64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-export async function refreshOAuthToken(refreshToken: string): Promise<OAuthTokens> {
+export async function refreshOAuthToken(
+  refreshToken: string,
+  proxyUrl?: string,
+): Promise<OAuthTokens> {
   const res = await postToken({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -161,7 +164,7 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
     // Keep this: src/oauth.ts sends it, and this flow is reverse-engineered
     // from the real Claude Code CLI. Do not drift from the CLI's request body.
     scope: DEFAULT_SCOPES.join(' '),
-  })
+  }, proxyUrl)
   if (res.status !== 200 || !res.data) {
     const message = `OAuth refresh failed (${describeFailure(res)})`
     throw isPermanent(res) ? new OAuthPermanentError(message) : new Error(message)
@@ -224,6 +227,7 @@ export function parsePastedCode(input: string): { code: string; state: string | 
 export async function completeOAuthLogin(
   pasted: string,
   pending: PendingLogin,
+  proxyUrl?: string,
 ): Promise<OAuthTokens> {
   if (pending.expiresAt <= Date.now()) {
     throw new Error('Login request expired — start a new one')
@@ -242,7 +246,7 @@ export async function completeOAuthLogin(
     client_id: CLIENT_ID,
     code_verifier: pending.verifier,
     state: pending.state,
-  })
+  }, proxyUrl)
   if (res.status !== 200 || !res.data) {
     throw new Error(`Token exchange failed (${describeFailure(res)})`)
   }

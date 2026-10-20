@@ -18,6 +18,7 @@ export type AccountRow = {
   env: Record<string, unknown> | null
   promptEnv: Record<string, unknown> | null
   enabled: boolean
+  proxyUrl: string
   createdAt: number
 }
 
@@ -40,7 +41,7 @@ type RawAccount = {
   id: string; label: string; refresh_token: string; access_token: string
   expires_at: number; state: string; last_error: string; last_refresh_at: number
   device_id: string; email: string; env_json: string; prompt_env_json: string
-  enabled: number; created_at: number
+  enabled: number; proxy_url: string; created_at: number
 }
 
 /** Parse a stored JSON column. An empty or malformed value means "inherit". */
@@ -69,6 +70,7 @@ function toAccount(r: RawAccount): AccountRow {
     env: parseJson(r.env_json),
     promptEnv: parseJson(r.prompt_env_json),
     enabled: r.enabled === 1,
+    proxyUrl: r.proxy_url,
     createdAt: r.created_at,
   }
 }
@@ -97,6 +99,7 @@ export function insertAccountRow(input: {
   email?: string
   env?: Record<string, unknown> | null
   promptEnv?: Record<string, unknown> | null
+  proxyUrl?: string
   refreshToken?: string
   accessToken?: string
   expiresAt?: number
@@ -105,8 +108,8 @@ export function insertAccountRow(input: {
     .prepare(
       `INSERT INTO accounts (
         id, label, refresh_token, access_token, expires_at,
-        device_id, email, env_json, prompt_env_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        device_id, email, env_json, prompt_env_json, proxy_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
@@ -118,6 +121,7 @@ export function insertAccountRow(input: {
       input.email || '',
       input.env ? JSON.stringify(input.env) : '',
       input.promptEnv ? JSON.stringify(input.promptEnv) : '',
+      input.proxyUrl || '',
       Date.now(),
     )
   return getAccountRow(input.id)!
@@ -134,6 +138,7 @@ const ACCOUNT_COLUMNS: Record<string, string> = {
   deviceId: 'device_id',
   email: 'email',
   enabled: 'enabled',
+  proxyUrl: 'proxy_url',
 }
 
 export function updateAccountRow(

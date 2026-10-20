@@ -107,6 +107,11 @@ export function accountsScript(): string {
         + field('label', 'acct.label') + field('email', 'acct.email')
         + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
         + area('env', 'acct.envLabel') + area('promptEnv', 'acct.promptEnvLabel')
+        + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:flex-end">'
+        + '<label style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:260px">'
+        + '<span class="meta">' + E(T('acct.proxyLabel')) + (a.proxyUrl ? ' - ' + E(T('acct.proxyKeep', { url: a.proxyUrl })) : '') + '</span>'
+        + '<input class="acct-e" data-f="proxyUrl" autocomplete="off" spellcheck="false" placeholder="' + E(T('acct.proxyPh')) + '" value="' + E(e.proxyUrl) + '" /></label>'
+        + (a.proxyUrl ? '<button type="button" class="acct-proxy-clear danger">' + E(T('acct.proxyClear')) + '</button>' : '')
         + '</div><div style="display:flex;gap:8px;margin-top:8px">'
         + '<button type="button" class="acct-save primary">' + E(T('common.save')) + '</button>'
         + '<button type="button" class="acct-edit-cancel">' + E(T('common.cancel')) + '</button>'
@@ -121,7 +126,9 @@ export function accountsScript(): string {
       document.getElementById('acctEmpty').style.display = accounts.length ? 'none' : 'block';
       rowsEl.innerHTML = accounts.map((a) => '<tr data-id="' + E(a.id) + '">'
         + '<td><code>' + E(a.id) + '</code></td>'
-        + '<td>' + E(a.label) + '</td>'
+        + '<td>' + E(a.label)
+          + (a.proxyUrl ? ' <span class="pill warn" title="' + E(T('acct.viaProxy', { url: a.proxyUrl })) + '">proxy</span>' : '')
+          + '</td>'
         + '<td><span class="pill ' + (PILL[a.state] || 'warn') + '" title="' + E(a.lastError) + '">' + E(stateLabel(a.state)) + '</span></td>'
         + '<td>' + (a.expiresAt ? E(new Date(a.expiresAt).toLocaleString()) : '-') + '</td>'
         + '<td>' + E(a.email)
@@ -169,7 +176,7 @@ export function accountsScript(): string {
       try {
         if (cls.contains('acct-edit')) {
           const a = accounts.find((x) => x.id === id);
-          if (a) edit[id] = { label: a.label, email: a.email, env: json(a.env), promptEnv: json(a.promptEnv) };
+          if (a) edit[id] = { label: a.label, email: a.email, env: json(a.env), promptEnv: json(a.promptEnv), proxyUrl: '' };
           render();
         } else if (cls.contains('acct-edit-cancel')) {
           delete edit[id];
@@ -185,11 +192,19 @@ export function accountsScript(): string {
             if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(T('acct.badJson', { field: name }));
             return v;
           };
+          // proxyUrl is sent only when typed: the stored value is shown masked,
+          // so echoing it back would overwrite the real URL with the mask.
+          const proxyUrl = e.proxyUrl.trim();
           await api(url(id), 'PATCH', {
             label: e.label.trim(), email: e.email.trim(),
             env: parse('env', 'env'), promptEnv: parse('promptEnv', 'prompt_env'),
+            ...(proxyUrl ? { proxyUrl } : {}),
           });
           delete edit[id];
+          load();
+        } else if (cls.contains('acct-proxy-clear')) {
+          await api(url(id), 'PATCH', { proxyUrl: '' });
+          if (edit[id]) edit[id].proxyUrl = '';
           load();
         } else if (cls.contains('acct-login')) {
           const r = await api(url(id, 'login'), 'POST');

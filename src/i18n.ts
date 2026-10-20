@@ -406,6 +406,19 @@ const M: Record<string, Entry> = {
   'acct.usage': { en: 'Usage', vi: 'Đã dùng', zh: '用量' },
   'acct.usageRequests': { en: '{n} requests in total', vi: 'Tổng cộng {n} yêu cầu', zh: '共 {n} 次请求' },
   'acct.edit': { en: 'Edit', vi: 'Sửa', zh: '编辑' },
+  'acct.proxyLabel': { en: 'Proxy URL', vi: 'Proxy URL', zh: '代理 URL' },
+  'acct.proxyPh': {
+    en: 'http://user:pass@host:port - empty = direct',
+    vi: 'http://user:pass@host:port - để trống = đi thẳng',
+    zh: 'http://user:pass@host:port - 留空 = 直连',
+  },
+  'acct.proxyKeep': {
+    en: 'Current: {url}. Leave empty to keep it.',
+    vi: 'Hiện tại: {url}. Để trống để giữ nguyên.',
+    zh: '当前：{url}。留空则保持不变。',
+  },
+  'acct.proxyClear': { en: 'Clear proxy', vi: 'Xóa proxy', zh: '清除代理' },
+  'acct.viaProxy': { en: 'via proxy {url}', vi: 'qua proxy {url}', zh: '经代理 {url}' },
   'acct.envLabel': {
     en: 'env (JSON object, empty = inherit gateway default)',
     vi: 'env (đối tượng JSON, để trống = dùng mặc định của cổng)',

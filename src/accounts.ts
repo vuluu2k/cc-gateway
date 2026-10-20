@@ -9,6 +9,7 @@ import {
   OAuthPermanentError, LOGIN_TTL_MS,
 } from './oauth-client.js'
 import type { OAuthTokens, PendingLogin } from './oauth-client.js'
+import { maskProxyUrl, validateProxyUrl } from './proxy-agent.js'
 import { getClientAccountCostSince, periodStart } from './metrics.js'
 
 const FIVE_MINUTES = 5 * 60 * 1000
@@ -26,6 +27,8 @@ export type AccountView = {
   env: Record<string, unknown> | null
   promptEnv: Record<string, unknown> | null
   enabled: boolean
+  // Password-masked (user:***@host); the raw URL never leaves the server.
+  proxyUrl: string
   hasRefreshToken: boolean
   loginPending: boolean
   // When the REFRESH token itself expires, if the server told us. In-memory
@@ -80,6 +83,7 @@ function toView(row: AccountRow): AccountView {
     env: row.env,
     promptEnv: row.promptEnv,
     enabled: row.enabled,
+    proxyUrl: maskProxyUrl(row.proxyUrl),
     hasRefreshToken: row.refreshToken !== '',
     loginPending: pending !== undefined && pending.expiresAt > Date.now(),
     refreshTokenExpiresAt: runtimes.get(row.id)?.refreshTokenExpiresAt ?? null,
@@ -169,7 +173,7 @@ async function runRefresh(id: string): Promise<void> {
 
   try {
     log('info', `Refreshing OAuth token for account "${id}"...`)
-    const tokens = await refreshOAuthToken(row.refreshToken)
+    const tokens = await refreshOAuthToken(row.refreshToken, row.proxyUrl)
     if (stale()) {
       log('info', `Account "${id}": dropping a refresh result that predates a re-login`)
       return
@@ -263,6 +267,7 @@ export function createAccount(input: {
   env?: Record<string, unknown> | null
   promptEnv?: Record<string, unknown> | null
   deviceId?: string
+  proxyUrl?: string
 }): AccountView {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(input.id)) {
     throw new Error('Account id must be 1-64 chars: letters, digits or dashes')
@@ -270,6 +275,8 @@ export function createAccount(input: {
   if (input.deviceId && !/^[0-9a-f]{64}$/i.test(input.deviceId)) {
     throw new Error('deviceId must be exactly 64 hex characters')
   }
+  const proxyErr = validateProxyUrl(input.proxyUrl || '')
+  if (proxyErr) throw new Error(proxyErr)
   if (getAccountRow(input.id)) {
     throw new Error(`Account "${input.id}" already exists`)
   }
@@ -284,8 +291,13 @@ export function updateAccount(
     enabled?: boolean
     env?: Record<string, unknown> | null
     promptEnv?: Record<string, unknown> | null
+    proxyUrl?: string
   },
 ): AccountView {
+  if (patch.proxyUrl !== undefined) {
+    const proxyErr = validateProxyUrl(patch.proxyUrl)
+    if (proxyErr) throw new Error(proxyErr)
+  }
   const wasEnabled = getAccountRow(id)?.enabled
   const row = updateAccountRow(id, patch)
   if (patch.enabled === false) {
@@ -370,7 +382,7 @@ export async function completeLogin(
     throw new Error('Login request expired — start a new one')
   }
 
-  const tokens = await completeOAuthLogin(pasted, pending)
+  const tokens = await completeOAuthLogin(pasted, pending, getAccountRow(id)?.proxyUrl)
   pendingLogins.delete(id)
   const rt = runtimeOf(id)
   rt.generation++

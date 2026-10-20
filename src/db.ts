@@ -80,6 +80,7 @@ function migrate(db: Database.Database) {
       env_json        TEXT    NOT NULL DEFAULT '',
       prompt_env_json TEXT    NOT NULL DEFAULT '',
       enabled         INTEGER NOT NULL DEFAULT 1,
+      proxy_url       TEXT    NOT NULL DEFAULT '',
       created_at      INTEGER NOT NULL
     );
 
@@ -139,6 +140,12 @@ function migrate(db: Database.Database) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_rm_account_cost ON request_metrics(account_id, cost_usd)')
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_rm_model_ts ON request_metrics(model, ts)')
+
+  // ── Optional per-account outbound proxy ──
+  const acctCols = db.prepare('PRAGMA table_info(accounts)').all() as Array<{ name: string }>
+  if (!acctCols.some((c) => c.name === 'proxy_url')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN proxy_url TEXT NOT NULL DEFAULT ''")
+  }
 }
 
 export function getOrCreateMeta(key: string, factory: () => string): string {

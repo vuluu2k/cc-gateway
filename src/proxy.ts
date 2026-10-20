@@ -332,7 +332,7 @@ async function handleRequest(
   // Forward to upstream
   const upstreamUrl = new URL(path, upstream)
 
-  const agent = getProxyAgent()
+  const agent = getProxyAgent(selected.row.proxyUrl)
   const proxyReq = httpsRequest(
     upstreamUrl,
     {
@@ -688,14 +688,14 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
   return Buffer.concat(chunks)
 }
 
-// Only these five fields may be patched. `updateAccountRow` whitelists by
+// Only these six fields may be patched. `updateAccountRow` whitelists by
 // column name, and that whitelist includes refresh_token, access_token,
 // state and device_id - so handing it a raw JSON body would let an admin
 // overwrite an account's live tokens through the settings form.
 // Values inside env/promptEnv must be primitives: they are spread into
 // Config.env, which rewriter.ts reads as string | boolean | number, and a
 // nested object would reach the outgoing request fingerprint unchecked.
-const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv'] as const
+const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv', 'proxyUrl'] as const
 
 /** Account views plus lifetime spend per account (spec 8.1). */
 function accountsWithUsage() {
@@ -703,7 +703,7 @@ function accountsWithUsage() {
   return listAccounts().map((a) => ({ ...a, usage: usage[a.id] || { costUsd: 0, requests: 0 } }))
 }
 
-function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
+export function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Body must be a JSON object')
   const src = raw as Record<string, unknown>
   const out: Record<string, unknown> = {}
@@ -727,7 +727,7 @@ function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
       out[key] = value
     } else {
       if (typeof value !== 'string') throw new Error(`${key} must be a string`)
-      out[key] = value
+      out[key] = key === 'proxyUrl' ? value.trim() : value
     }
   }
   return out
@@ -891,13 +891,14 @@ async function handleDashboardArea(
     }
     try {
       const input = JSON.parse(body.toString('utf-8')) as {
-        id?: string; label?: string; email?: string
+        id?: string; label?: string; email?: string; proxyUrl?: string
       }
       if (!input.id) throw new Error('id is required')
       const account = createAccount({
         id: input.id,
         label: input.label,
         email: input.email || config.identity.email,
+        proxyUrl: typeof input.proxyUrl === 'string' ? input.proxyUrl.trim() : undefined,
       })
       log('info', `Account "${account.id}" created`)
       res.writeHead(201, { 'Content-Type': 'application/json' })
