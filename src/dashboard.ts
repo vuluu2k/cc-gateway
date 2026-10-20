@@ -1,4 +1,5 @@
 import { i18nHead, langSwitcher } from './i18n.js'
+import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
 
 export function renderLogin(error?: string): string {
   const errBlock = error
@@ -481,6 +482,7 @@ ${i18nHead()}
     <a href="#charts"><span class="icon">∿</span><span data-i18n="admin.nav.traffic">Traffic</span></a>
     <a href="#models"><span class="icon">◇</span><span data-i18n="admin.nav.models">By model</span></a>
     <a href="#clients"><span class="icon">◎</span><span data-i18n="admin.nav.clients">Clients</span></a>
+    <a href="#accounts"><span class="icon">☰</span><span data-i18n="acct.nav">Accounts</span></a>
     <a href="#recent"><span class="icon">»</span><span data-i18n="admin.nav.recent">Recent requests</span></a>
     <a href="#install"><span class="icon">⤓</span><span data-i18n="admin.nav.install">Install guide</span></a>
     <a href="#about"><span class="icon">?</span><span data-i18n="admin.nav.about">How to use</span></a>
@@ -540,6 +542,7 @@ ${i18nHead()}
       <div id="clientsConfig" style="margin-bottom:12px"></div>
       <div id="clientsTable"></div>
     </section>
+    ${renderAccountsSection()}
     <section id="recent" class="card">
       <h2>
         <span data-i18n="admin.sec.recent">Recent requests</span>
@@ -658,31 +661,6 @@ ${i18nHead()}
     </details>
   </div>
 </main>
-</div>
-
-<div id="oauthModal" class="modal" style="display:none">
-  <div class="modal-box">
-    <h3 data-i18n="admin.modal.oauth.title">Re-login with Claude</h3>
-    <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.oauth.note">Re-authenticates the gateway's shared Claude account.</p>
-
-    <label data-i18n="admin.modal.oauth.step1">1. Open the Claude sign-in page</label>
-    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n="admin.modal.oauth.step1note">Sign in with the account this gateway proxies, then approve access.</p>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button id="oaLink" type="button" data-i18n="admin.modal.oauth.openLink">Generate sign-in link</button>
-      <a id="oaOpen" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:var(--accent);font-size:13px" data-i18n="admin.modal.oauth.openTab">Open sign-in page ↗</a>
-    </div>
-
-    <label style="margin-top:16px" data-i18n="admin.modal.oauth.step2">2. Paste the authorization code</label>
-    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n-html="admin.modal.oauth.step2note">Claude shows a code after you approve.</p>
-    <input id="oaCode" placeholder="Paste the code from Claude" data-i18n-ph="admin.modal.oauth.codePh" autocomplete="off" spellcheck="false" />
-
-    <div id="oaError" class="error" style="display:none;margin-top:12px"></div>
-    <div id="oaOk" class="meta" style="display:none;margin-top:12px;color:var(--ok)"></div>
-    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
-      <button id="oaCancel" type="button" data-i18n="common.cancel">Cancel</button>
-      <button id="oaSubmit" type="button" class="primary" data-i18n="admin.modal.oauth.submit">Finish sign-in</button>
-    </div>
-  </div>
 </div>
 
 <div id="addClientModal" class="modal" style="display:none">
@@ -1472,114 +1450,21 @@ ${i18nHead()}
     }
   };
 
-  // ── OAuth account health + re-login ──
-  // The gateway proxies one shared Claude account. When its refresh_token dies
-  // every /v1/* call 503s, so surface that here with a one-click recovery
-  // instead of making the admin edit config.yaml and restart the container.
-  let oaTargetId = null;
+  // ── OAuth account health banner ──
   const renderOAuthBanner = (accounts) => {
     const banner = document.getElementById('oauthBanner');
     const expired = (accounts || []).filter((a) => a.state === 'expired');
     if (!expired.length) {
-      oaTargetId = null;
       banner.style.display = 'none';
       return;
     }
-    oaTargetId = expired[0].id;
     document.getElementById('oauthBannerMsg').textContent =
       t('admin.oauth.someExpired', { names: expired.map((a) => a.label || a.id).join(', ') });
     banner.style.display = 'flex';
   };
-
-  const showOaError = (msg) => {
-    const el = document.getElementById('oaError');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  const showOaOk = (msg) => {
-    const el = document.getElementById('oaOk');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  let oaLinkReady = false;
-  const openOauthModal = () => {
-    oaLinkReady = false;
-    document.getElementById('oaCode').value = '';
-    document.getElementById('oaOpen').style.display = 'none';
-    showOaError(null);
-    showOaOk(null);
-    document.getElementById('oauthModal').style.display = 'flex';
-  };
-  const closeOauthModal = () => {
-    document.getElementById('oauthModal').style.display = 'none';
-  };
-  const startOauthLogin = async () => {
-    if (!oaTargetId) return;
-    const btn = document.getElementById('oaLink');
-    btn.disabled = true;
-    showOaError(null);
-    showOaOk(null);
-    try {
-      const res = await fetch('/api/accounts/' + encodeURIComponent(oaTargetId) + '/login', { method: 'POST', credentials: 'same-origin' });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showOaError(t('admin.modal.oauth.linkErr', { error: err.error || res.status }));
-        return;
-      }
-      const data = await res.json();
-      const link = document.getElementById('oaOpen');
-      link.href = data.url;
-      link.style.display = 'inline';
-      oaLinkReady = true;
-      window.open(data.url, '_blank', 'noopener');
-      document.getElementById('oaCode').focus();
-    } catch (e) {
-      showOaError(t('admin.alert.networkErr'));
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  const submitOauthCode = async () => {
-    if (!oaTargetId) return;
-    if (!oaLinkReady) { showOaError(t('admin.modal.oauth.needLink')); return; }
-    const code = document.getElementById('oaCode').value.trim();
-    if (!code) { showOaError(t('admin.modal.oauth.needCode')); return; }
-    const btn = document.getElementById('oaSubmit');
-    btn.disabled = true;
-    showOaError(null);
-    showOaOk(t('admin.modal.oauth.working'));
-    try {
-      const res = await fetch('/api/accounts/' + encodeURIComponent(oaTargetId) + '/complete', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        showOaOk(null);
-        showOaError(t('admin.alert.failed', { error: data.error || res.status }));
-        return;
-      }
-      showOaOk(t('admin.modal.oauth.ok', { time: new Date(data.expires_at).toLocaleTimeString() }));
-      renderOAuthBanner(data.accounts);
-      setTimeout(() => { closeOauthModal(); refresh(); }, 1200);
-    } catch (e) {
-      showOaOk(null);
-      showOaError(t('admin.alert.networkErr'));
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  document.getElementById('oauthBannerBtn').addEventListener('click', openOauthModal);
-  document.getElementById('oaLink').addEventListener('click', startOauthLogin);
-  document.getElementById('oaSubmit').addEventListener('click', submitOauthCode);
-  document.getElementById('oaCancel').addEventListener('click', closeOauthModal);
-  document.getElementById('oauthModal').addEventListener('click', (e) => {
-    if (e.target.id === 'oauthModal') closeOauthModal();
-  });
-  document.getElementById('oaCode').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submitOauthCode();
+  // Re-login happens per account in the Accounts section.
+  document.getElementById('oauthBannerBtn').addEventListener('click', () => {
+    document.getElementById('accounts').scrollIntoView({ behavior: 'smooth' });
   });
 
   document.getElementById('refreshBtn').addEventListener('click', refresh);
@@ -2096,6 +1981,7 @@ ${i18nHead()}
     'charts-section': 'admin.nav.traffic',
     'models': 'admin.nav.models',
     'clients': 'admin.nav.clients',
+    'accounts': 'acct.nav',
     'recent': 'admin.nav.recent',
     'install': 'admin.nav.install',
     'about': 'admin.nav.about',
@@ -2110,7 +1996,7 @@ ${i18nHead()}
     const title = document.getElementById('pageTitle');
     if (title && sectionToTitle[id]) title.textContent = t(sectionToTitle[id]);
   };
-  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'recent', 'install', 'about']
+  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'accounts', 'recent', 'install', 'about']
     .map(id => document.getElementById(id))
     .filter(Boolean);
   if ('IntersectionObserver' in window) {
@@ -2127,6 +2013,8 @@ ${i18nHead()}
     }, { rootMargin: '-80px 0px -50% 0px', threshold: [0, 0.1, 0.5, 1] });
     for (const el of observed) io.observe(el);
   }
+
+  ${accountsScript()}
 
   loadClients();
   refresh();
