@@ -1,0 +1,34 @@
+# Plain-VPS deployment on webcake-ai (no Coolify/Traefik). See ./README.md.
+# Deployed by .github/workflows/deploy-vps.yml into ~/cc-gateway on the VPS.
+#
+# Everything stateful (ccg.db, auto-generated config.yaml, backups) lives in
+# ~/cc-gateway/data — a bind mount outside src/ and deploy/, so rebuilds,
+# restarts and redeploys never touch it.
+
+# Fixed project name: same containers whichever directory compose runs from.
+name: cc-gateway
+
+services:
+  gateway:
+    build:
+      context: ../..            # repo root (relative to this file)
+      dockerfile: Dockerfile
+    container_name: cc-gateway
+    init: true
+    restart: unless-stopped
+    mem_limit: ${CCG_MEM_LIMIT:-1g}
+    volumes:
+      - ../../data:/app/data
+    # Published only on the private interface: nginx-01 reaches it, the internet doesn't.
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${HOST_PORT:-8443}:8443"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8443/_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # json-file does not rotate by default.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
