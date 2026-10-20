@@ -1,99 +1,101 @@
 # CC Gateway
 
-Gateway đứng giữa Claude Code và Anthropic API, cho một nhóm người dùng chung **nhiều account Claude** qua một chỗ quản lý duy nhất:
+English | [Tiếng Việt](README.vi.md)
 
-- Nhiều account Claude trong một server, mỗi account mang danh tính riêng (`device_id`, email, fingerprint môi trường) và tuỳ chọn ra Internet qua proxy riêng.
-- Mỗi client (người dùng) có token riêng, được gán một hoặc nhiều account theo thứ tự ưu tiên, kèm hạn mức chi phí cho từng cặp client–account. Hết hạn mức ở account này thì tự chuyển sang account kế tiếp.
-- Dashboard web: thêm account và **đăng nhập lại ngay trên web**, tạo client, gán account, xem chi phí theo client/account và quota 5 giờ / theo tuần của từng account.
-- Toàn bộ trạng thái nằm trong SQLite ở `data/`; restart hay deploy lại không mất dữ liệu.
-- Người dùng chỉ cài một launcher và dùng Claude Code như bình thường.
+A gateway between Claude Code and the Anthropic API that lets a team share **several Claude accounts** from one place:
 
-Bản trực quan (sơ đồ tuyến, phần thử chọn account, vòng đời account): tải [`docs/how-it-works.html`](docs/how-it-works.html) về và mở bằng trình duyệt. Hướng dẫn vận hành chi tiết: [`README.vi.md`](README.vi.md). Deploy lên VPS bằng GitHub Actions: [`deploy/vps/README.md`](deploy/vps/README.md).
+- Many Claude accounts on one server, each with its own identity (`device_id`, email, environment fingerprint) and, optionally, its own outbound proxy.
+- Each client (person) gets its own token and is assigned one or more accounts in priority order, with a cost limit per client–account pair. When one account's limit is used up, the client moves on to the next.
+- Web dashboard: add accounts and **re-login them right in the browser**, create clients, assign accounts, watch cost per client/account and each account's 5-hour / weekly quota.
+- All state lives in SQLite under `data/`; restarts and redeploys never lose it.
+- Users install one launcher and use Claude Code as usual.
 
-## Cách hoạt động
+Visual walkthrough (route map, live account-selection simulator, account lifecycle): download [`docs/how-it-works.html`](docs/how-it-works.html) and open it in a browser (Vietnamese). Detailed operations guide: [`README.vi.md`](README.vi.md). VPS deploy with GitHub Actions: [`deploy/vps/README.md`](deploy/vps/README.md).
 
-Người dùng vẫn chạy Claude Code như cũ. Gateway đứng giữa: chọn một account Claude còn dùng được, đổi danh tính của request cho khớp account đó, rồi gửi lên Anthropic bằng token OAuth của account đó.
+## How it works
+
+Clients keep running Claude Code as before. The gateway sits in the middle: it picks a Claude account that is still usable, rewrites the request to that account's identity, and forwards it with that account's OAuth token.
 
 ```mermaid
 flowchart LR
-  A[alice] & B[bob] & C[... các client khác] -->|token client| N[nginx / TLS]
+  A[alice] & B[bob] & C[... more clients] -->|client token| N[nginx / TLS]
   N --> G{{cc-gateway}}
-  G -->|danh tính + token pro-1| U[api.anthropic.com]
-  G -->|danh tính + token pro-2| U
-  G -->|pro-3 qua proxy_url riêng| P[HTTP proxy] --> U
+  G -->|pro-1 identity + token| U[api.anthropic.com]
+  G -->|pro-2 identity + token| U
+  G -->|pro-3 via its own proxy_url| P[HTTP proxy] --> U
 ```
 
-### Một request đi qua những bước nào
+### One request, step by step
 
-| # | Bước | Có thể dừng với |
-|---|------|-----------------|
-| 1 | **Nhận diện client** bằng token (bảng `clients`). | `401` token không tồn tại |
-| 2 | **Lấy các account đã gán** cho client (`client_accounts`): mỗi cặp có ưu tiên (số nhỏ dùng trước) và hạn mức riêng. | `503` client chưa được gán account |
-| 3 | **Chọn account**: đi theo ưu tiên, lấy account đầu tiên đang bật, còn token hợp lệ, và client chưa tiêu hết hạn mức trên account đó trong kỳ (trọn đời / tháng / ngày, theo UTC). Hạn mức `0` = không giới hạn. Chỉ request tính tiền `/v1/messages` mới bị hạn mức chặn. | `429` mọi account dùng được đều hết hạn mức (body liệt kê đã dùng/hạn mức); `503` mọi account đều tắt hoặc cần đăng nhập lại |
-| 4 | **Đổi danh tính** sang account đã chọn: `device_id`, email, fingerprint env, prompt env; che đường dẫn máy client. | |
-| 5 | **Gửi lên Anthropic** bằng access token của account, qua `proxy_url` của account nếu có (không có thì dùng `HTTPS_PROXY` chung, không có nữa thì đi thẳng). | |
-| 6 | **Trả kết quả**, đổi đường dẫn về lại như cũ, **ghi chi phí** theo cặp (client, account), cập nhật quota 5h/tuần của account. | |
+| # | Step | Can stop with |
+|---|------|---------------|
+| 1 | **Identify the client** by its token (`clients` table). | `401` unknown token |
+| 2 | **Load its account bindings** (`client_accounts`): each has a priority (lower is tried first) and its own cost limit. | `503` no account assigned |
+| 3 | **Pick an account**: walk the bindings by priority and take the first one that is enabled, has a valid token, and where this client's spend in the period (lifetime / monthly / daily, UTC) is under the limit. A limit of `0` means unlimited. Only billable `/v1/messages` requests are limit-gated. | `429` every usable account is over its limit (the body lists used/limit per account); `503` every account is disabled or needs re-login |
+| 4 | **Rewrite the identity** to the chosen account: `device_id`, email, env fingerprint, prompt env; mask the client's local paths. | |
+| 5 | **Forward** with the account's OAuth access token, through the account's `proxy_url` if set (otherwise the global `HTTPS_PROXY`, otherwise direct). | |
+| 6 | **Stream the response back**, un-mask paths, **record** cost per (client, account), and update that account's 5h/weekly quota from Anthropic's headers. | |
 
-Gateway **không tự chuyển account** khi Anthropic trả 429/401 giữa chừng: request đó trả lỗi thật, account hỏng bị bỏ qua từ request kế tiếp.
+The gateway does **not** fail over when Anthropic returns 429/401 mid-request: that request returns the real error, and a broken account is skipped from the next request on.
 
-### Vòng đời account
+### Account lifecycle
 
-Mỗi account tự giữ token và timer làm mới riêng; một account hỏng không kéo account khác hỏng theo.
+Each account keeps its own tokens and refresh timer, so one broken account never takes another down.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> uninitialized: Thêm account (dashboard)
-  uninitialized --> ok: Re-login (mở link, dán code)
-  ok --> refreshing: 5 phút trước khi hết hạn
-  refreshing --> ok: làm mới xong
-  refreshing --> refreshing: lỗi tạm thời, thử lại 30s..10 phút
-  refreshing --> expired: refresh_token bị từ chối
+  [*] --> uninitialized: Add account (dashboard)
+  uninitialized --> ok: Re-login (open link, paste code)
+  ok --> refreshing: 5 min before expiry
+  refreshing --> ok: refreshed
+  refreshing --> refreshing: transient error, retry 30s..10min
+  refreshing --> expired: refresh_token rejected
   expired --> ok: Re-login
 ```
 
-Mỗi account sửa được nhãn, email, env / prompt env riêng và `proxy_url` tuỳ chọn (`http://user:pass@host:port`; mật khẩu không bao giờ hiện lại). Để trống `proxy_url` thì mọi account đi ra bằng IP của server.
+Per account you can edit the label, email, env / prompt env overrides and an optional `proxy_url` (`http://user:pass@host:port`; the password is never shown back). With no `proxy_url`, every account goes out through the server's IP.
 
-### Dữ liệu nằm ở đâu
+### Where state lives
 
-Toàn bộ trong `data/` (volume Docker / thư mục bind mount):
+Everything is in `data/` (Docker volume or bind mount):
 
-| Đường dẫn | Nội dung |
-|-----------|----------|
-| `ccg.db` → `accounts` | token OAuth, danh tính, proxy của từng account |
-| `ccg.db` → `clients`, `client_accounts` | token client; gán account kèm ưu tiên + hạn mức |
-| `ccg.db` → `request_metrics`, `users`, `meta` | chi phí từng request, tài khoản admin, trạng thái setup |
-| `config.yaml` | cấu hình tĩnh + danh tính mẫu cho account mới |
-| `backups/` | bản backup SQLite (deploy VPS giữ 14 bản) |
+| Path | Contents |
+|------|----------|
+| `ccg.db` → `accounts` | OAuth tokens, identity and proxy per account |
+| `ccg.db` → `clients`, `client_accounts` | client tokens; bindings with priority + limit |
+| `ccg.db` → `request_metrics`, `users`, `meta` | per-request cost, admin users, setup state |
+| `config.yaml` | static settings + identity template for new accounts |
+| `backups/` | SQLite backups (the VPS deploy keeps 14) |
 
-`oauth:` / `auth.tokens` trong `config.yaml` chỉ được đọc **một lần** để chuyển bản cài một-account cũ vào DB. Sau đó sửa chúng không còn tác dụng; mọi thứ quản lý trên dashboard. Deploy lên VPS: xem [`deploy/vps/README.md`](deploy/vps/README.md).
+The `oauth:` / `auth.tokens` keys of `config.yaml` are read **once**, to migrate an old single-account install into the database. After that, editing them has no effect; everything is managed in the dashboard.
 
-### Ai làm gì
+### Who does what
 
-- **Admin** (`/admin`): tạo admin đầu tiên bằng setup code in trong log; thêm account và đăng nhập ngay trên dashboard; tạo client, gán account theo thứ tự ưu tiên kèm hạn mức từng cặp; theo dõi chi phí theo client/account và quota 5h/tuần của từng account.
-- **Người dùng client**: cài launcher một lần, dùng Claude Code bình thường; xem hạn mức còn lại theo từng account ở `/portal`.
+- **Admin** (`/admin`): creates the first admin with the setup code printed in the logs; adds accounts and logs them in from the dashboard; creates clients and assigns accounts in priority order with per-pair limits; watches cost per client/account and each account's 5h/weekly quota.
+- **Client user**: installs the launcher once and uses Claude Code normally; sees the remaining limit per account at `/portal`.
 
-## Gateway sửa gì trong request
+## What gets rewritten
 
-Mọi giá trị dưới đây lấy theo **account được chọn** cho request đó (account không đặt riêng thì dùng giá trị mẫu trong `config.yaml`).
+Every value below comes from the **account chosen** for that request (accounts without their own value use the template in `config.yaml`).
 
-| Lớp | Trường | Xử lý |
-|-----|--------|-------|
-| Danh tính | `device_id` trong metadata và event | thay bằng `device_id` của account |
-| | `email` | thay bằng email của account |
-| Môi trường | object `env` (hơn 40 trường) | thay nguyên object |
-| Tiến trình | `constrainedMemory`, `rss`, `heapTotal`, `heapUsed` | đưa về giá trị/khoảng cố định |
-| Header | `User-Agent` | phiên bản Claude Code chuẩn (tự cập nhật hằng ngày) |
-| | `x-api-key` của client | thay bằng access token OAuth của account |
-| | `x-anthropic-billing-header` | bỏ hẳn |
-| Prompt | `Platform`, `Shell`, `OS Version`, `Working directory` | thay bằng `prompt_env` |
-| | đường dẫn `/Users/xxx/`, `/home/xxx/`, `C:\Users\xxx\` | che thành đường dẫn chuẩn, đổi ngược lại trong câu trả lời |
-| Telemetry | `baseUrl`, `gateway` | bỏ, để không lộ việc đi qua gateway |
+| Layer | Field | Action |
+|-------|-------|--------|
+| Identity | `device_id` in metadata and events | replaced by the account's `device_id` |
+| | `email` | replaced by the account's email |
+| Environment | `env` object (40+ fields) | whole object replaced |
+| Process | `constrainedMemory`, `rss`, `heapTotal`, `heapUsed` | normalized to fixed values / ranges |
+| Headers | `User-Agent` | canonical Claude Code version (auto-updated daily) |
+| | client `x-api-key` | replaced by the account's OAuth access token |
+| | `x-anthropic-billing-header` | stripped |
+| Prompt | `Platform`, `Shell`, `OS Version`, `Working directory` | replaced by `prompt_env` |
+| | paths like `/Users/xxx/`, `/home/xxx/`, `C:\Users\xxx\` | masked to a canonical path, reversed in the response |
+| Telemetry | `baseUrl`, `gateway` | stripped so the gateway is not revealed |
 
-## Cài đặt
+## Installation
 
-### Docker trên server trắng
+### Docker on a fresh server
 
-Không cần đăng nhập Claude trên máy chủ, không cần mount credentials.
+No Claude login on the server and no mounted credentials needed.
 
 ```bash
 git clone https://github.com/vuluu2k/cc-gateway.git && cd cc-gateway
@@ -101,78 +103,78 @@ docker compose -f deploy/vps/docker-compose.yml up -d --build
 docker compose -f deploy/vps/docker-compose.yml logs gateway | grep -i 'setup code'
 ```
 
-1. Container khởi động với 0 account và in ra **setup code** (dùng một lần, hết hạn sau 24 giờ; restart container để in code mới).
-2. Mở `https://<domain>/admin`, nhập username, password và setup code để tạo admin đầu tiên.
-3. **Accounts → Add account**, rồi **Re-login**: mở link Claude, duyệt, dán code vào ô bên dưới.
-4. **Clients → + Add client** để tạo client và tải launcher; trên hàng của client, bấm **Accounts for this client** để gán account (ưu tiên, hạn mức, kỳ).
+1. The container boots with zero accounts and prints a **setup code** (single use, expires after 24 hours; restart the container to print a new one).
+2. Open `https://<domain>/admin` and enter a username, password and the setup code to create the first admin.
+3. **Accounts → Add account**, then **Re-login**: open the Claude link, approve, and paste the code into the box below it.
+4. **Clients → + Add client** to create a client and download its launcher; on that client's row, **Accounts for this client** assigns accounts (priority, limit, period).
 
-Gateway nghe HTTP trên cổng `8443`, mặc định chỉ ở `127.0.0.1`; muốn reverse proxy ở máy khác gọi tới thì đặt `BIND_IP=<IP nội bộ>` trong `deploy/vps/.env`. Đặt một reverse proxy có TLS phía trước (nginx, Caddy, Traefik…) và chuyển tiếp `Host` cùng `X-Forwarded-Proto` (xem [`deploy/vps/nginx-ccg.conf`](deploy/vps/nginx-ccg.conf)). Dữ liệu nằm ở `data/` cạnh repo.
+The gateway serves HTTP on port `8443`, bound to `127.0.0.1` by default; set `BIND_IP=<private IP>` in `deploy/vps/.env` if the reverse proxy runs on another machine. Put a TLS reverse proxy in front (nginx, Caddy, Traefik…) and forward `Host` and `X-Forwarded-Proto` (see [`deploy/vps/nginx-ccg.conf`](deploy/vps/nginx-ccg.conf)). Data lives in `data/` next to the repo.
 
-### Deploy tự động lên VPS
+### Automatic deploy to a VPS
 
-Push lên `main` → runner GitHub Actions cài sẵn trên VPS tự backup DB, build và khởi động lại container, rồi kiểm tra `/_health`. Cách cài runner, biến repo và cron backup: [`deploy/vps/README.md`](deploy/vps/README.md). Nếu repo để public, **bắt buộc** bật *Require approval for all external contributors* cho workflow từ fork PR.
+Push to `main` → a GitHub Actions runner installed on the VPS backs up the DB, rebuilds and restarts the container, then checks `/_health`. Runner setup, repo variables and the backup cron: [`deploy/vps/README.md`](deploy/vps/README.md). If the repo is public, you **must** enable *Require approval for all external contributors* for fork pull request workflows.
 
-### Chạy local để phát triển
+### Local development
 
-Cần Node.js 22+.
+Requires Node.js 22+.
 
 ```bash
 npm install
-npm run dev        # tsx watch, tự reload; config mặc định ở ./data/config.yaml
-npm test           # toàn bộ test (tsx + assert)
-npm run build      # biên dịch ra dist/
+npm run dev        # tsx watch with auto-reload; default config at ./data/config.yaml
+npm test           # all tests (tsx + assert)
+npm run build      # compile to dist/
 ```
 
-Trên macOS đã đăng nhập Claude Code, `bash scripts/quick-setup.sh` lấy credentials từ Keychain, tạo `config.yaml` và một launcher; lần khởi động đầu, account đó được nhập vào DB thành account `default`.
+On a Mac already logged in to Claude Code, `bash scripts/quick-setup.sh` reads the credentials from the Keychain, writes `config.yaml` and a launcher; on first start that account is imported into the database as account `default`.
 
-## Dùng cho client
+## Client usage
 
-Admin gửi file launcher `cc-<tên>` tải từ dashboard. Người dùng chạy:
+The admin sends the `cc-<name>` launcher downloaded from the dashboard. The user runs:
 
 ```bash
 chmod +x cc-alice
-./cc-alice install        # cài thành lệnh 'ccg'
-ccg                       # chạy Claude Code qua gateway
+./cc-alice install        # installs the 'ccg' command
+ccg                       # run Claude Code through the gateway
 ```
 
 ```
-ccg                       Chạy Claude Code qua gateway (mọi tham số của claude đều dùng được)
-ccg install / uninstall   Cài / gỡ lệnh 'ccg'
-ccg hijack / release      Cho 'claude' cũng đi qua gateway / trả lại như cũ
-ccg native [args]         Chạy claude gốc một lần, không qua gateway
-ccg status                Kiểm tra kết nối tới gateway
+ccg                       Run Claude Code through the gateway (all claude arguments work)
+ccg install / uninstall   Install / remove the 'ccg' command
+ccg hijack / release      Route 'claude' through the gateway too / restore it
+ccg native [args]         Run the native claude once, bypassing the gateway
+ccg status                Check the connection to the gateway
 ```
 
-Hạn mức còn lại theo từng account: `https://<domain>/portal`.
+Remaining limit per account: `https://<domain>/portal`.
 
-## Cấu hình
+## Configuration
 
-`data/config.yaml` được tạo tự động lần đầu và chỉ chứa phần cấu hình tĩnh:
+`data/config.yaml` is generated on first start and only holds static settings:
 
-| Khoá | Ý nghĩa |
-|------|---------|
-| `server.port`, `server.tls` | cổng nghe; TLS nếu không có reverse proxy phía trước |
-| `upstream.url` | mặc định `https://api.anthropic.com` |
-| `identity`, `env`, `prompt_env`, `process` | danh tính và fingerprint **mẫu** cho account mới; từng account ghi đè được trên dashboard |
-| `logging`, `db.path` | mức log; đường dẫn SQLite |
+| Key | Meaning |
+|-----|---------|
+| `server.port`, `server.tls` | listen port; TLS if there is no reverse proxy in front |
+| `upstream.url` | defaults to `https://api.anthropic.com` |
+| `identity`, `env`, `prompt_env`, `process` | identity and fingerprint **template** for new accounts; each account can override them in the dashboard |
+| `logging`, `db.path` | log level; SQLite path |
 
-Account, client, gán account và hạn mức **không** nằm trong `config.yaml` mà trong DB, quản lý trên dashboard. Khoá `oauth` / `auth.tokens` cũ chỉ được đọc một lần để chuyển bản cài một-account sang DB.
+Accounts, clients, bindings and limits are **not** in `config.yaml`; they live in the database and are managed in the dashboard.
 
-| Biến môi trường | Tác dụng |
-|-----------------|----------|
-| `CCG_CONFIG_PATH` | đường dẫn `config.yaml` (mặc định `/app/data/config.yaml`) |
-| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | proxy chung cho account không đặt `proxy_url` riêng |
-| `CCG_REFRESH_TOKEN` (hoặc `CCG_CREDENTIALS_PATH`) | tuỳ chọn: tạo sẵn account đầu tiên trên server mới, khỏi đăng nhập trên web |
-| `CCG_DISABLE_VERSION_AUTOUPDATE` | tắt việc tự cập nhật phiên bản Claude Code giả lập |
+| Environment variable | Effect |
+|----------------------|--------|
+| `CCG_CONFIG_PATH` | path to `config.yaml` (default `/app/data/config.yaml`) |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | shared proxy for accounts without their own `proxy_url` |
+| `CCG_REFRESH_TOKEN` (or `CCG_CREDENTIALS_PATH`) | optional: seed the first account on a fresh server and skip the browser login |
+| `CCG_DISABLE_VERSION_AUTOUPDATE` | disable the daily Claude Code version update |
 
-## Lưu ý
+## Caveats
 
-- **Không tự chuyển account khi Anthropic báo lỗi.** Account bị Anthropic giới hạn (429) hoặc hết phiên (401) làm request đó lỗi thật; chỉ hết *hạn mức do bạn đặt* mới chuyển account.
-- **Chung IP.** Account không đặt `proxy_url` đều đi ra bằng IP của server. Muốn tách IP cho từng account, đặt proxy HTTP(S) riêng (không hỗ trợ SOCKS).
-- **MCP chính thức** (`mcp-proxy.anthropic.com`) không đi theo `ANTHROPIC_BASE_URL`, nên không qua gateway. Có thể chặn bằng Clash: mẫu ở [`clash-rules.yaml`](clash-rules.yaml).
-- **Bản Claude Code mới** có thể thêm trường telemetry hoặc endpoint mới; kiểm tra lại sau khi nâng cấp.
-- **Mọi máy nên đi qua gateway**, kể cả máy admin, để không lộ thêm một fingerprint khác cho cùng account.
+- **No failover on upstream errors.** An account rate-limited by Anthropic (429) or with an expired session (401) fails that request for real; only *your own* cost limits move a client to the next account.
+- **Shared IP.** Accounts without a `proxy_url` all go out through the server's IP. To give an account its own IP, set an HTTP(S) proxy for it (SOCKS is not supported).
+- **Official MCP servers** (`mcp-proxy.anthropic.com`) ignore `ANTHROPIC_BASE_URL` and bypass the gateway. You can block them with Clash; see [`clash-rules.yaml`](clash-rules.yaml).
+- **New Claude Code versions** may add telemetry fields or endpoints; re-check after upgrading.
+- **Route every machine through the gateway**, the admin's included, so no second fingerprint shows up for the same account.
 
 ## License
 
-MIT, xem [`LICENSE`](LICENSE).
+MIT, see [`LICENSE`](LICENSE).
