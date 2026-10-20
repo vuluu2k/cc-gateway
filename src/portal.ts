@@ -130,9 +130,6 @@ ${SHARED_HEAD_STYLE}
   .card h3 { margin: 0 0 12px; font-size: 13px; }
   .stat .value { font-size: 22px; font-weight: 600; font-family: var(--mono); }
   .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 4px; letter-spacing: .03em; }
-  .credit-card { background: linear-gradient(135deg, #11161d, #1a2230); }
-  .credit-big { font-size: 36px; font-weight: 700; font-family: var(--mono); }
-  .credit-sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meter { height: 10px; background: var(--panel-2); border-radius: 6px; overflow: hidden; margin: 16px 0 6px; }
   .meter > span { display: block; height: 100%; background: var(--ok); width: 0; transition: width .3s; }
   .meter > span.warn { background: var(--warn); }
@@ -208,12 +205,10 @@ ${SHARED_HEAD_STYLE}
   <section id="overview" class="block">
     <h2 class="section-title" data-i18n="portal.sec.overview">Overview</h2>
     <div class="grid">
-      <div class="card credit-card">
-        <h3 data-i18n="portal.credit.h">Your credit</h3>
-        <div id="creditBig" class="credit-big">…</div>
-        <div id="creditSub" class="credit-sub"></div>
-        <div class="meter" id="creditMeterWrap"><span id="creditMeter"></span></div>
-        <div id="creditUsed" class="muted" style="font-size:12px"></div>
+      <div id="loadErr" class="error" style="display:none"></div>
+      <div class="card">
+        <h3 data-i18n="portal.quotaPerAccount">Quota per account</h3>
+        <div class="table-wrap" id="quotaTable"></div>
       </div>
       <div class="row" id="lifetimeStats"></div>
     </div>
@@ -240,7 +235,6 @@ ${SHARED_HEAD_STYLE}
         <h3 data-i18n="portal.account.h">Account</h3>
         <div class="kv">
           <div class="k" data-i18n="portal.account.name">Client name</div><div class="v" id="acName">—</div>
-          <div class="k" data-i18n="portal.quotaPerAccount">Quota per account</div><div class="v" id="acPlan">—</div>
           <div class="k" data-i18n="portal.account.since">Member since</div><div class="v" id="acSince">—</div>
           <div class="k" data-i18n="portal.account.pwSet">Password set</div><div class="v" id="acPwUpdated">—</div>
         </div>
@@ -409,9 +403,7 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('headerSub').textContent = '@' + d.name;
     document.getElementById('avatar').textContent = (display[0] || '?').toUpperCase();
 
-    // The single client-wide credit card is hidden until it is redesigned around
-    // per-account limits; showing a stale single number would mislead.
-    document.getElementById('creditBig').closest('.card').style.display = 'none';
+    document.getElementById('loadErr').style.display = 'none';
 
     // Lifetime stats
     const lt = d.lifetime;
@@ -428,10 +420,13 @@ ${SHARED_HEAD_STYLE}
     const a = d.account || {};
     const quotas = d.quotas || [];
     document.getElementById('acName').textContent = d.name;
-    document.getElementById('acPlan').innerHTML = quotas.length
-      ? quotas.map((q) => '<div>' + esc(q.account) + ': ' + (q.limit_usd > 0
-          ? fmtCost(q.used_usd) + ' / ' + fmtCost(q.limit_usd) + ' (' + periodLabel(q.period) + ')'
-          : esc(t('portal.credit.unlimited'))) + '</div>').join('')
+    // One row per bound account; there is deliberately no single client-wide limit.
+    document.getElementById('quotaTable').innerHTML = quotas.length
+      ? '<table><thead><tr><th>' + esc(t('admin.acctColumn')) + '</th><th class="num">' + esc(t('portal.used')) + '</th><th class="num">' + esc(t('bind.limit')) + '</th><th>' + esc(t('bind.period')) + '</th></tr></thead><tbody>'
+        + quotas.map((q) => '<tr><td>' + esc(q.account) + '</td><td class="num">' + fmtCost(q.used_usd) + '</td><td class="num">'
+          + (q.limit_usd > 0 ? fmtCost(q.limit_usd) : esc(t('portal.credit.unlimited')))
+          + '</td><td>' + esc(periodLabel(q.period)) + '</td></tr>').join('')
+        + '</tbody></table>'
       : '<span class="muted">' + esc(t('portal.account.noQuota')) + '</span>';
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
@@ -653,7 +648,11 @@ ${SHARED_HEAD_STYLE}
   const load = () => fetch('/portal/me', { headers: { 'Accept': 'application/json' } })
     .then(r => { if (r.status === 401) { window.location.href = '/portal'; return null; } return r.json(); })
     .then(d => { if (d) render(d); })
-    .catch(() => { document.getElementById('creditBig').textContent = t('portal.msg.loadErr'); });
+    .catch(() => {
+      const el = document.getElementById('loadErr');
+      el.textContent = t('portal.msg.loadErr');
+      el.style.display = 'block';
+    });
   load();
   setInterval(load, 30000);
 })();

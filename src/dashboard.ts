@@ -1,5 +1,6 @@
 import { i18nHead, langSwitcher } from './i18n.js'
 import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
+import { renderBindingsModal, bindingsScript } from './dashboard-bindings.js'
 
 export function renderLogin(error?: string): string {
   const errBlock = error
@@ -367,14 +368,6 @@ ${i18nHead()}
   .path { color: var(--fg); opacity: .9; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msg { color: var(--fg); opacity: .85; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   .msg.empty { color: var(--muted); font-style: italic; }
-  .limit-bar {
-    display: inline-block; width: 70px; height: 5px;
-    background: var(--panel-2); border-radius: 3px; overflow: hidden;
-    vertical-align: middle; margin-left: 6px;
-  }
-  .limit-bar > span { display: block; height: 100%; background: var(--ok); }
-  .limit-bar > span.warn { background: var(--warn); }
-  .limit-bar > span.err { background: var(--err); }
   /* Session-quota panel: one card per rolling window (5h / weekly). */
   .quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
   .quota-win { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
@@ -551,6 +544,7 @@ ${i18nHead()}
       <div id="recentFilters" class="filter-bar" style="display:none">
         <input id="rfSearch" type="search" data-i18n-ph="admin.recent.searchPh" placeholder="Search client / path / model / message…" autocomplete="off" />
         <select id="rfClient"><option value="" data-i18n="admin.recent.allClients">All clients</option></select>
+        <select id="rfAccount"><option value="" data-i18n="admin.acctFilterAll">All accounts</option></select>
         <select id="rfModel"><option value="" data-i18n="admin.recent.allModels">All models</option></select>
         <select id="rfStatus">
           <option value="" data-i18n="admin.recent.allStatus">All status</option>
@@ -682,14 +676,6 @@ ${i18nHead()}
         <option value="unix" data-i18n="admin.modal.platform.unix">macOS / Linux (bash)</option>
         <option value="windows" data-i18n="admin.modal.platform.windows">Windows (PowerShell)</option>
       </select>
-      <label data-i18n="admin.modal.costLimit.optional">Cost limit (USD) — optional, 0 = unlimited</label>
-      <input id="cLimit" type="number" min="0" step="0.01" placeholder="0" autocomplete="off" />
-      <label data-i18n="admin.modal.limitWindow">Limit window</label>
-      <select id="cLimitPeriod">
-        <option value="lifetime" data-i18n="admin.modal.period.lifetime">Lifetime</option>
-        <option value="monthly" data-i18n="admin.modal.period.monthly">Monthly (UTC)</option>
-        <option value="daily" data-i18n="admin.modal.period.daily">Daily (UTC)</option>
-      </select>
       <div id="cError" class="error" style="display:none;margin-top:12px"></div>
       <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
         <button id="cCancel" type="button" data-i18n="common.cancel">Cancel</button>
@@ -800,25 +786,7 @@ ${i18nHead()}
   </div>
 </div>
 
-<div id="limitModal" class="modal" style="display:none">
-  <div class="modal-box">
-    <h3><span data-i18n="admin.modal.limit.title">Set cost limit</span> · <span id="limitName"></span></h3>
-    <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.limit.note">Block this client from <code>/v1/messages</code> when the window's cost reaches the limit. Other endpoints (free) keep working.</p>
-    <label data-i18n="admin.modal.limit.costLimit">Cost limit (USD) — 0 / empty = unlimited</label>
-    <input id="lLimit" type="number" min="0" step="0.01" placeholder="0" autocomplete="off" />
-    <label data-i18n="admin.modal.window">Window</label>
-    <select id="lPeriod">
-      <option value="lifetime" data-i18n="admin.modal.period.lifetime">Lifetime</option>
-      <option value="monthly" data-i18n="admin.modal.period.monthly">Monthly (UTC)</option>
-      <option value="daily" data-i18n="admin.modal.period.daily">Daily (UTC)</option>
-    </select>
-    <div id="lError" class="error" style="display:none;margin-top:12px"></div>
-    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
-      <button id="lCancel" type="button" data-i18n="common.cancel">Cancel</button>
-      <button id="lSubmit" type="button" class="primary" data-i18n="common.save">Save</button>
-    </div>
-  </div>
-</div>
+${renderBindingsModal()}
 
 <div id="workdirModal" class="modal" style="display:none">
   <div class="modal-box">
@@ -1162,6 +1130,7 @@ ${i18nHead()}
         <thead><tr>
           <th>\${esc(t('th.when'))}</th>
           <th>\${esc(t('th.client'))}</th>
+          <th>\${esc(t('admin.acctColumn'))}</th>
           <th>\${esc(t('th.model'))}</th>
           <th>\${esc(t('th.message'))}</th>
           <th>\${esc(t('th.path'))}</th>
@@ -1195,6 +1164,7 @@ ${i18nHead()}
     tr.innerHTML = \`
       <td class="ago" data-ts="\${r.ts}" data-label="">\${fmtAgo(r.ts)}</td>
       <td data-label="\${esc(t('th.client'))}">\${esc(r.client)}</td>
+      <td data-label="\${esc(t('admin.acctColumn'))}">\${r.accountId ? '<code>' + esc(r.accountId) + '</code>' : '<span class="meta">—</span>'}</td>
       <td data-label="\${esc(t('th.model'))}"><span class="meta">\${esc(shortModel(r.model))}</span></td>
       \${msgCell}
       <td class="path" data-label="\${esc(t('th.path'))}" title="\${esc(r.method + ' ' + r.path)}">\${esc(r.path)}</td>
@@ -1213,15 +1183,16 @@ ${i18nHead()}
   let recentPaused = false;      // user is hovering the table
   let recentSeenTs = new Set();  // every ts considered (DOM-rendered OR filtered out)
 
-  const recentFilters = { search: '', client: '', model: '', status: '', method: '' };
+  const recentFilters = { search: '', client: '', account: '', model: '', status: '', method: '' };
 
   const recentFilterActive = () =>
-    !!(recentFilters.search || recentFilters.client || recentFilters.model
+    !!(recentFilters.search || recentFilters.client || recentFilters.account || recentFilters.model
       || recentFilters.status || recentFilters.method);
 
   const matchesRecentFilter = (r) => {
     const f = recentFilters;
     if (f.client && r.client !== f.client) return false;
+    if (f.account && (r.accountId || '') !== f.account) return false;
     if (f.model && (r.model || '') !== f.model) return false;
     if (f.method && r.method !== f.method) return false;
     if (f.status) {
@@ -1262,6 +1233,12 @@ ${i18nHead()}
     fillSelectKeepingValue(
       document.getElementById('rfClient'),
       Array.from(clientsSet).sort(),
+    );
+    const accountsSet = new Set();
+    for (const r of data.recent) if (r.accountId) accountsSet.add(r.accountId);
+    fillSelectKeepingValue(
+      document.getElementById('rfAccount'),
+      Array.from(accountsSet).sort(),
     );
     fillSelectKeepingValue(
       document.getElementById('rfModel'),
@@ -1479,6 +1456,7 @@ ${i18nHead()}
     const onChange = () => {
       recentFilters.search = document.getElementById('rfSearch').value.trim();
       recentFilters.client = document.getElementById('rfClient').value;
+      recentFilters.account = document.getElementById('rfAccount').value;
       recentFilters.model  = document.getElementById('rfModel').value;
       recentFilters.status = document.getElementById('rfStatus').value;
       recentFilters.method = document.getElementById('rfMethod').value;
@@ -1491,12 +1469,14 @@ ${i18nHead()}
     };
     document.getElementById('rfSearch').addEventListener('input', onSearchInput);
     document.getElementById('rfClient').addEventListener('change', onChange);
+    document.getElementById('rfAccount').addEventListener('change', onChange);
     document.getElementById('rfModel').addEventListener('change', onChange);
     document.getElementById('rfStatus').addEventListener('change', onChange);
     document.getElementById('rfMethod').addEventListener('change', onChange);
     document.getElementById('rfClear').addEventListener('click', () => {
       document.getElementById('rfSearch').value = '';
       document.getElementById('rfClient').value = '';
+      document.getElementById('rfAccount').value = '';
       document.getElementById('rfModel').value = '';
       document.getElementById('rfStatus').value = '';
       document.getElementById('rfMethod').value = '';
@@ -1505,18 +1485,6 @@ ${i18nHead()}
   })();
 
   // ── Clients management ──
-  const renderLimitCell = (c) => {
-    if (!c.cost_limit_usd) {
-      return '<span class="meta">' + esc(t('admin.client.unlimited')) + '</span>';
-    }
-    const used = c.cost_used_usd || 0;
-    const pct = Math.min(100, Math.round((used / c.cost_limit_usd) * 100));
-    const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
-    const period = c.cost_limit_period || 'lifetime';
-    return \`<span title="\${esc(t('admin.client.windowTitle', { period: period }))}">\${fmtCost(used)} / \${fmtCost(c.cost_limit_usd)} (\${pct}%)</span>\` +
-      \`<span class="limit-bar"><span class="\${cls}" style="width:\${pct}%"></span></span>\`;
-  };
-
   const renderClientsConfig = (clients) => {
     const el = document.getElementById('clientsConfig');
     if (!clients.length) {
@@ -1527,15 +1495,12 @@ ${i18nHead()}
       <tr>
         <td data-label=""><strong>\${esc(c.name)}</strong></td>
         <td data-label="\${esc(t('th.token'))}"><code class="config-info">\${esc(c.token_preview)}</code></td>
-        <td data-label="\${esc(t('th.costLimit'))}">\${renderLimitCell(c)}</td>
         <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
         <td data-label="" style="text-align:right;white-space:nowrap">
           <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>
-          <button data-edit-limit="\${esc(c.name)}"
-                  data-limit="\${c.cost_limit_usd || ''}"
-                  data-period="\${esc(c.cost_limit_period || 'lifetime')}">\${esc(t('admin.client.setLimit'))}</button>
+          <button data-bind-client="\${esc(c.name)}">\${esc(t('bind.title'))}</button>
           <button data-regen="\${esc(c.name)}">\${esc(t('admin.client.redownload'))}</button>
           <button data-reset-pw="\${esc(c.name)}">\${esc(t('admin.client.resetPw'))}</button>
           <button class="danger" data-del-client="\${esc(c.name)}">\${esc(t('admin.client.delete'))}</button>
@@ -1543,7 +1508,7 @@ ${i18nHead()}
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
-        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.costLimit'))}</th><th>\${esc(t('th.workdir'))}</th><th></th></tr></thead>
+        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.workdir'))}</th><th></th></tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
     el.querySelectorAll('[data-edit-workdir]').forEach(btn => {
@@ -1564,15 +1529,6 @@ ${i18nHead()}
           return;
         }
         loadClients();
-      });
-    });
-    el.querySelectorAll('[data-edit-limit]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openLimitModal(
-          btn.getAttribute('data-edit-limit'),
-          btn.getAttribute('data-limit'),
-          btn.getAttribute('data-period') || 'lifetime',
-        );
       });
     });
     el.querySelectorAll('[data-regen]').forEach(btn => {
@@ -1621,8 +1577,6 @@ ${i18nHead()}
     document.getElementById('cAddr').value = location.host;
     document.getElementById('cScheme').value = location.protocol === 'http:' ? 'http' : 'https';
     document.getElementById('cPlatform').value = 'unix';
-    document.getElementById('cLimit').value = '';
-    document.getElementById('cLimitPeriod').value = 'lifetime';
     showError(null);
     modalBoxEl().classList.remove('wide');
     document.getElementById('modalForm').style.display = 'block';
@@ -1756,13 +1710,7 @@ ${i18nHead()}
     const gateway_addr = document.getElementById('cAddr').value.trim();
     const scheme = document.getElementById('cScheme').value;
     const platform = document.getElementById('cPlatform').value;
-    const limitRaw = document.getElementById('cLimit').value.trim();
-    const cost_limit_usd = limitRaw === '' ? null : Number(limitRaw);
-    const cost_limit_period = document.getElementById('cLimitPeriod').value;
     if (!name) { showError(t('admin.err.nameRequired')); return; }
-    if (cost_limit_usd !== null && (!Number.isFinite(cost_limit_usd) || cost_limit_usd < 0)) {
-      showError(t('admin.err.costNonNeg')); return;
-    }
     const submitBtn = document.getElementById('cSubmit');
     submitBtn.disabled = true;
     try {
@@ -1770,7 +1718,7 @@ ${i18nHead()}
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, gateway_addr, scheme, platform, cost_limit_usd, cost_limit_period }),
+        body: JSON.stringify({ name, gateway_addr, scheme, platform }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1793,56 +1741,6 @@ ${i18nHead()}
       submitBtn.disabled = false;
     }
   };
-
-  // ── Set-limit modal ──
-  const showLimitError = (msg) => {
-    const el = document.getElementById('lError');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  const openLimitModal = (name, currentLimit, currentPeriod) => {
-    document.getElementById('limitName').textContent = name;
-    document.getElementById('lLimit').value = currentLimit && Number(currentLimit) > 0 ? currentLimit : '';
-    document.getElementById('lPeriod').value = currentPeriod || 'lifetime';
-    showLimitError(null);
-    document.getElementById('limitModal').style.display = 'flex';
-    document.getElementById('limitModal').setAttribute('data-name', name);
-    setTimeout(() => document.getElementById('lLimit').focus(), 0);
-  };
-  const closeLimitModal = () => { document.getElementById('limitModal').style.display = 'none'; };
-  const submitLimit = async () => {
-    const name = document.getElementById('limitModal').getAttribute('data-name');
-    const raw = document.getElementById('lLimit').value.trim();
-    const cost_limit_usd = raw === '' ? null : Number(raw);
-    const cost_limit_period = document.getElementById('lPeriod').value;
-    if (cost_limit_usd !== null && (!Number.isFinite(cost_limit_usd) || cost_limit_usd < 0)) {
-      showLimitError(t('admin.err.costNonNeg')); return;
-    }
-    const btn = document.getElementById('lSubmit');
-    btn.disabled = true;
-    try {
-      const res = await fetch('/api/clients/' + encodeURIComponent(name), {
-        method: 'PATCH',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cost_limit_usd, cost_limit_period }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showLimitError(err.error || t('admin.err.requestFailed', { status: res.status }));
-        return;
-      }
-      closeLimitModal();
-      loadClients();
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  document.getElementById('lCancel').addEventListener('click', closeLimitModal);
-  document.getElementById('lSubmit').addEventListener('click', submitLimit);
-  document.getElementById('limitModal').addEventListener('click', (e) => {
-    if (e.target.id === 'limitModal') closeLimitModal();
-  });
 
   // ── Set-workdir modal ──
   const showWorkdirError = (msg) => {
@@ -2015,6 +1913,7 @@ ${i18nHead()}
   }
 
   ${accountsScript()}
+  ${bindingsScript()}
 
   loadClients();
   refresh();

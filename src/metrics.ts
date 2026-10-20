@@ -531,7 +531,7 @@ export function getMetricsSnapshot() {
   const recent = (db
     .prepare(
       `SELECT
-        ts, client, method, path, status,
+        ts, client, account_id as accountId, method, path, status,
         duration_ms as durationMs,
         model,
         input_tokens as inputTokens,
