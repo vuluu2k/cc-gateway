@@ -941,8 +941,11 @@ async function handleDashboardArea(
       }
       try {
         const patch = sanitizeAccountPatch(JSON.parse(body.toString('utf-8')))
+        // Before writeHead: updateAccount throws on validation (e.g. a bad proxyUrl),
+        // and fail() can't send a 400 once the 200 headers are out.
+        const updated = updateAccount(id, patch)
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(updateAccount(id, patch)))
+        res.end(JSON.stringify(updated))
       } catch (err) {
         fail(400, err)
       }
