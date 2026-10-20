@@ -13,7 +13,9 @@ server:
 upstream:
   url: https://api.anthropic.com
 
-# OAuth - gateway manages token lifecycle centrally
+# OAuth - imported ONCE, on the first start, as upstream account "default" (with the
+# auth.tokens below as its clients). After that accounts and clients live in the
+# database and are managed from the admin dashboard; edits here are ignored.
 # Extract credentials from macOS Keychain:
 #   security find-generic-password -a "$USER" -s "Claude Code-credentials" -w | python3 -c "import sys,json; d=json.load(sys.stdin)['claudeAiOauth']; print(f'access_token: {d[\"accessToken\"]}\nrefresh_token: {d[\"refreshToken\"]}\nexpires_at: {d[\"expiresAt\"]}')"
 # Or just run: bash scripts/quick-setup.sh (extracts automatically)
@@ -22,8 +24,8 @@ oauth:
   refresh_token: "your-refresh-token-here"
   expires_at: 0
 
-# Authentication - each client gets a unique token
-# Generate tokens: bash scripts/add-client.sh <name>
+# Authentication - each client gets a unique token (first-start import only, see above).
+# Later clients: admin dashboard -> Clients -> "+ Add client".
 auth:
   tokens:
     - name: machine-a

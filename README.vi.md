@@ -79,26 +79,14 @@ ccg native    # chạy claude gốc một lần, bỏ qua gateway
 
 ### 2.4. Thêm client (cho user khác trong team)
 
-Có hai cách: dùng dashboard web (mục 4) hoặc dùng script:
+Client nằm trong database, không còn đọc từ `config.yaml`, nên thêm client bằng dashboard web (mục 4):
 
-```bash
-bash scripts/add-client.sh alice
-bash scripts/add-client.sh bob
-```
+1. **Clients -> + Add client**: sinh token và tải về launcher `cc-<tên>` (điền địa chỉ gateway và scheme trong form; để trống thì dùng địa chỉ bạn đang mở dashboard).
+2. Bấm **Tài khoản của client này** (giao diện tiếng Anh: *Accounts for this client*) ở dòng client đó để gán một hoặc nhiều account upstream (độ ưu tiên + hạn mức tuỳ chọn). Client chưa được gán account sẽ nhận `503`.
 
-Script sẽ:
-- Sinh token mới và append vào `config.yaml` (gateway hot-reload trong ~2 giây nhờ `watchFile`).
-- Tạo file `./clients/cc-alice`, `./clients/cc-bob`.
+Gửi nguyên file launcher cho user — không cần share `config.yaml`, không cần OAuth login lại. Không cần restart gateway.
 
-Gửi nguyên file launcher cho user — không cần share `config.yaml`, không cần OAuth login lại.
-
-Mặc định launcher trỏ về `http://localhost:8443`. Để trỏ tới gateway từ xa:
-
-```bash
-bash scripts/add-client.sh alice "" gateway.example.com:8443 https
-```
-
-Bốn tham số: `<tên> [token] [host:port] [scheme]`. Token để rỗng (`""`) sẽ tự sinh.
+`scripts/add-client.sh` giờ chỉ còn ghi launcher cho một token **đã có** trong gateway (`quick-setup.sh` / `admin-setup.sh` dùng nó); gọi không kèm token thì script báo lỗi và chỉ sang dashboard.
 
 ### 2.5. Chạy sau lưng proxy
 
@@ -123,7 +111,7 @@ npm run generate-token           # sinh token rời
 npm run generate-identity        # sinh identity rời
 ```
 
-> **Lưu ý:** `add-user` tạo tài khoản đăng nhập **dashboard web** (lưu trong SQLite ở `./data/ccg.db`), khác với `add-client.sh` (tạo launcher Claude Code cho client). Xem chi tiết ở mục 4.
+> **Lưu ý:** `add-user` tạo tài khoản đăng nhập **dashboard web** (lưu trong SQLite ở `./data/ccg.db`), khác với client (launcher Claude Code, tạo trong dashboard). Xem chi tiết ở mục 4.
 
 ---
 
@@ -136,7 +124,7 @@ docker compose up -d
 docker compose logs gateway | grep "setup code"
 ```
 
-1. Gateway khởi động với 0 account và in ra log một **mã cài đặt** dùng một lần (hạn 24h).
+1. Gateway khởi động với 0 account và in ra log một **mã cài đặt** dùng một lần (hạn 24h). Hết hạn thì restart container (`docker compose restart gateway`) để in mã mới.
 2. Mở `https://<domain>/admin`, nhập username, mật khẩu và mã cài đặt để tạo admin đầu tiên.
 3. Trong dashboard, vào **Accounts -> Add account** rồi đăng nhập Claude ngay trên trình duyệt.
 4. Tạo client và gán client vào account.
@@ -169,10 +157,7 @@ curl http://localhost:8443/_health   # phải trả về 200
 
 ### 3.2. Thêm client sau khi đã deploy
 
-```bash
-bash scripts/add-client.sh charlie "" your-domain.com:443 https
-docker compose restart        # nạp lại danh sách token
-```
+Vào dashboard (`https://<domain>/admin`): **Accounts** để thêm account Claude (hoặc **Re-login** khi refresh token của account chết), **Clients -> + Add client** để tạo client và tải launcher, rồi gán account cho client. Không cần restart.
 
 `docker-compose.yml` mount `ccg_data` (volume) để giữ `config.yaml` + SQLite giữa các lần restart, nên `device_id` và token sẽ không bị reset.
 
@@ -195,11 +180,7 @@ openssl req -x509 -newkey rsa:2048 \
   -days 365 -nodes -subj "/CN=cc-gateway"
 ```
 
-Bỏ comment phần `tls` trong `config.yaml`, sau đó sinh launcher với scheme `https`:
-
-```bash
-bash scripts/add-client.sh alice "" <gateway-ip>:8443 https
-```
+Bỏ comment phần `tls` trong `config.yaml`, sau đó tải launcher ở dashboard → **Clients -> + Add client**, điền địa chỉ `<gateway-ip>:8443` và scheme `https` trong form.
 
 Launcher tự thêm `NODE_TLS_REJECT_UNAUTHORIZED=0` để chấp nhận self-signed cert.
 
@@ -217,8 +198,8 @@ Khi container start lần đầu mà chưa có `config.yaml` ở `/app/data/conf
 Mount này đã được comment sẵn trong `docker-compose.yml`; bỏ comment nếu muốn seed account đầu tiên từ login của host. Nếu không có nguồn nào, gateway vẫn khởi động với 0 account.
 
 Ngoài ra:
-- **Token rotation persist**: mỗi lần OAuth refresh, refresh token mới được ghi đè vào `config.yaml` để restart không bị "replay" token đã tiêu thụ.
-- **Sync from credentials**: nếu host chạy `claude` và rotate token, gateway phát hiện `refresh_token` trong `credentials.json` khác với `config.yaml` và đồng bộ lại trước khi load.
+- **Token nằm trong database**: mỗi account lưu access/refresh token trong `ccg.db`, và token rotate khi refresh được ghi vào đó — `config.yaml` không còn là trạng thái sống.
+- **Seed chỉ một lần**: khối `oauth` + `auth.tokens` của `config.yaml` (hoặc credentials từ env/file mount) chỉ được nhập vào database ở lần khởi động đầu tiên của DB đó. Sau đó đổi `credentials.json` hay `config.yaml` không còn tác dụng; xoá hết account rồi restart cũng không tạo lại. Account hỏng thì **Re-login** trong dashboard → Accounts.
 
 Có thể sinh thủ công `config.yaml` từ login Claude hiện có:
 
@@ -262,7 +243,8 @@ Script hỏi password tương tác (>= 8 ký tự), hash bằng scrypt, lưu và
 - **Quản lý client trong UI**: thêm/xoá launcher trực tiếp, copy lệnh cài đặt cho user.
 - **Per-request token usage & cost**: mỗi request lưu input / output / cache tokens riêng.
 - **Tổng hợp theo period**: today / 7 ngày / 30 ngày / all time.
-- **Hot-reload**: thêm/xoá client trong dashboard cập nhật `config.yaml` và gateway nạp lại token trong ~2 giây mà không cần restart.
+- **Nhiều account**: mục Accounts thêm account, đăng nhập lại, sửa label / email / env / prompt_env, xem tổng chi phí từng account; hạn mức 5h/tuần hiển thị riêng từng account.
+- **Không cần restart**: client và account lưu trong SQLite, thay đổi trong dashboard có hiệu lực ngay.
 
 Pricing tính trong `src/pricing.ts`. Dữ liệu metric lưu SQLite, sống cùng volume `ccg_data` nên không mất khi redeploy.
 
@@ -294,7 +276,7 @@ cc-gateway/
 ├── scripts/             # bash scripts dùng từ shell
 │   ├── quick-setup.sh   # setup + start local trong 1 lệnh
 │   ├── admin-setup.sh   # deploy Docker tương tác
-│   ├── add-client.sh    # thêm client + sinh launcher
+│   ├── add-client.sh    # ghi launcher cho token đã có (dùng bởi các script setup)
 │   ├── extract-token.sh # rút OAuth token khỏi Keychain
 │   └── gen-config.sh    # sinh config.yaml từ login Claude hiện có
 ├── clients/             # launcher cho từng user (gitignore)
@@ -314,10 +296,10 @@ cc-gateway/
 |---|---|
 | `Error: No Claude Code credentials found` | Chưa login Claude Code lần nào. Chạy `claude` trên máy admin, hoàn tất OAuth qua trình duyệt, rồi chạy lại setup. |
 | `No dashboard users yet` ở log | Chạy `npm run add-user -- <username>` (hoặc `docker compose exec gateway node dist/scripts/add-user.js <username>`) để tạo user trước khi vào `/login`. |
-| Gateway start xong nhưng client báo 401 | Token trong launcher không khớp `config.yaml`. Sinh lại launcher bằng `add-client.sh` với token đúng, hoặc kiểm tra mục `auth.tokens`. |
+| Gateway start xong nhưng client báo 401 | Token trong launcher không có trong database. Tải lại launcher từ dashboard → Clients (hoặc tạo client mới). Sửa `auth.tokens` trong `config.yaml` không còn tác dụng. |
 | Anthropic trả 401 dù vừa refresh | Đảm bảo bản đang chạy là sau commit `497f46f` (forward OAuth qua `Authorization: Bearer` + `anthropic-beta`). Build lại nếu deploy bằng Docker. |
-| Refresh token bị "consumed" sau restart | Cần bản có `f22386e` — gateway tự ghi token rotated trở lại `config.yaml`. Kiểm tra quyền ghi của file/volume. |
-| Refresh token hết hạn (hiếm, sau vài tháng) | Chạy lại `bash scripts/extract-token.sh` trên máy admin, hoặc cập nhật `oauth.refresh_token` trong `config.yaml`. |
+| Refresh token bị "consumed" sau restart | Token rotate được ghi vào `ccg.db`. Kiểm tra quyền ghi của `data/`, rồi **Re-login** account đó trong dashboard → Accounts. |
+| Refresh token hết hạn (hiếm, sau vài tháng) | Dashboard → Accounts → **Re-login** cho account đó. Các account khác không bị ảnh hưởng. |
 | Request không qua proxy | Kiểm tra `HTTPS_PROXY` đã set khi start gateway chưa. Restart sau khi đổi env. |
 | Docker container không đọc được credentials | Đảm bảo mount `~/.claude/.credentials.json:/app/data/claude-credentials.json:ro` đúng; với non-root user, chỉnh path host cho phù hợp. |
 | Dashboard hiện 0 request dù client đang dùng | Kiểm tra `data/ccg.db` có quyền ghi; xem log `metrics`/`usage-parser` để bắt lỗi parse usage block. |
@@ -352,9 +334,8 @@ ccg
 ```bash
 bash scripts/admin-setup.sh
 docker compose exec gateway node dist/scripts/add-user.js admin
-# Thêm client qua dashboard hoặc:
-bash scripts/add-client.sh alice "" gateway.example.com:443 https
-# gửi file ./clients/cc-alice cho Alice (config tự hot-reload, không cần restart)
+# Dashboard: Accounts -> thêm account; Clients -> + Add client, gán account
+# gửi file launcher đã tải cho Alice (không cần restart)
 ```
 
 Xem [`README.md`](README.md) để biết chi tiết về cơ chế rewrite, OAuth lifecycle, Clash rules và các caveat.

@@ -652,7 +652,7 @@ ${i18nHead()}
         <p style="margin:0 0 10px" data-i18n-html="admin.about.periods"><strong>Cost &amp; usage by period</strong> — same totals split by Today / Last 7d / Last 30d / All time so you can track spend trend.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.charts"><strong>Requests over time</strong> — per-client traffic. Toggle <em>Last 60 min</em> / <em>Last 24 h</em>.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.models"><strong>By model</strong> — per-model totals: calls, input/output/cache tokens, and cost. Cost uses Anthropic public list prices.</p>
-        <p style="margin:0 0 10px" data-i18n-html="admin.about.clients"><strong>Clients</strong> — every entry under <code>auth.tokens</code>, with their lifetime calls / tokens / cost. Click <strong>+ Add client</strong> to generate a token, append it to <code>config.yaml</code>, and download a launcher script.</p>
+        <p style="margin:0 0 10px" data-i18n-html="admin.about.clients"><strong>Clients</strong> — every client in the gateway database, with their lifetime calls / tokens / cost. Click <strong>+ Add client</strong> to generate a token and download a launcher script, then <strong>Accounts for this client</strong> on its row to choose which upstream accounts it may use.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.recent"><strong>Recent requests</strong> — last 50 requests with model, tokens, cost, and duration. New rows stream in at the top; updates pause while you're hovering so the view doesn't jump.</p>
         <p style="margin:0" data-i18n-html="admin.about.platform">Pick a target platform — <strong>macOS / Linux</strong> downloads <code>cc-&lt;name&gt;</code> (bash), <strong>Windows</strong> downloads <code>cc-&lt;name&gt;.ps1</code> (PowerShell). The "Client created" panel shows OS-specific install steps to copy into a terminal.</p>
       </div>
@@ -665,7 +665,7 @@ ${i18nHead()}
   <div class="modal-box">
     <div id="modalForm">
       <h3 data-i18n="admin.modal.addClient.title">Add client</h3>
-      <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.addClient.note">Generates a token, appends it to <code>config.yaml</code>, and downloads a launcher script.</p>
+      <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.addClient.note">Generates a token, saves the client in the gateway database, and downloads a launcher script. Assign it an account afterwards (<strong>Accounts for this client</strong> on its row).</p>
       <label data-i18n="admin.modal.addClient.name">Client name</label>
       <input id="cName" placeholder="e.g. vuluu2k" data-i18n-ph="admin.modal.addClient.namePh" autocomplete="off" />
       <label data-i18n="admin.modal.gatewayAddr">Gateway address</label>

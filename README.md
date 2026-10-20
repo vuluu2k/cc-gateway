@@ -70,6 +70,8 @@ This will:
 4. Generate a client launcher at `./clients/cc-<hostname>`
 5. Start the gateway on `http://localhost:8443`
 
+On that first start the `oauth` block and client in `config.yaml` are imported into the database once, as upstream account `default` and its client. From then on accounts and clients are managed in the admin dashboard (`/admin`), not in `config.yaml`. Create the first admin with the one-time **setup code** printed in the gateway log; it expires after 24 hours, so restart the gateway to print a fresh one.
+
 ### Use it
 
 In another terminal:
@@ -90,14 +92,12 @@ The gateway will route all outbound traffic (API calls + token refresh) through 
 
 ## Add Clients
 
-Each person gets their own launcher script with a unique token. The admin generates it:
+Each person gets their own launcher script with a unique token. The admin creates it in the dashboard (`/admin`):
 
-```bash
-bash scripts/add-client.sh alice
-bash scripts/add-client.sh bob
-```
+1. **Clients -> + Add client**: generates the token and downloads the launcher `cc-<name>`.
+2. **Accounts for this client** on that client's row in **Clients**: assign one or more upstream accounts (priority + optional spend limit). A client with no account gets `503`.
 
-This creates `./clients/cc-alice` and `./clients/cc-bob`. Send each file to the respective person.
+Send the downloaded file to the respective person. Upstream Claude accounts are added, and re-logged-in when their refresh token dies, from **Accounts** in the same dashboard.
 
 ### Client setup (what you tell them)
 
@@ -187,13 +187,7 @@ This interactive script:
 3. Builds and starts the Docker container
 4. Asks for the gateway address clients should connect to
 
-After setup, add more clients with:
-
-```bash
-bash scripts/add-client.sh <name>
-# Restart to pick up new tokens:
-docker compose restart
-```
+After setup, add more accounts and clients from the dashboard (`/admin` -> **Accounts** and **Clients**). No restart is needed. The first admin is created with the setup code from `docker compose logs gateway | grep "setup code"`; after 24 hours restart the container for a fresh code.
 
 ### Multi-machine deployment
 
@@ -214,11 +208,7 @@ openssl req -x509 -newkey rsa:2048 \
   -days 365 -nodes -subj "/CN=cc-gateway"
 ```
 
-Uncomment the `tls` section in `config.yaml`, then generate client launchers pointing to the server address:
-
-```bash
-bash scripts/add-client.sh alice "" <gateway-ip>:8443 https
-```
+Uncomment the `tls` section in `config.yaml`, then download client launchers from the dashboard (**Clients -> + Add client**) with the gateway address `<gateway-ip>:8443` and scheme `https` filled in.
 
 ### Alternative: Tailscale (zero config networking)
 
@@ -260,7 +250,7 @@ The gateway manages the full OAuth token lifecycle:
 1. **Startup** — uses the existing access token from your keychain. Zero network calls.
 2. **Auto-refresh** — 5 minutes before expiry, the gateway silently refreshes via `platform.claude.com`.
 3. **Continuous** — refresh tokens rotate automatically. The gateway runs indefinitely without admin intervention.
-4. **Failure recovery** — if a refresh fails, retries every 30 seconds. Only a refresh token expiry (rare, months) requires re-running `extract-token.sh`.
+4. **Failure recovery** — if a refresh fails, it backs off and retries (30s, doubling, capped at 10 minutes). Only a dead refresh token (rare, months) needs action: **Dashboard -> Accounts -> Re-login** for that account. Each account refreshes independently, so one dead account never affects the others.
 
 Clients never contact `platform.claude.com`. They send requests to the gateway with their client token; the gateway injects the real OAuth token before forwarding upstream.
 
@@ -283,7 +273,7 @@ See [`clash-rules.yaml`](clash-rules.yaml) for the full template.
 
 - **MCP servers** — `mcp-proxy.anthropic.com` is hardcoded and does not follow `ANTHROPIC_BASE_URL`. If clients use official MCP servers, those requests bypass the gateway. Use Clash to block this domain if MCP is not needed.
 - **CC updates** — New Claude Code versions may introduce new telemetry fields or endpoints. Monitor Clash REJECT logs for unexpected connection attempts after upgrades.
-- **Token lifecycle** — The gateway auto-refreshes the OAuth access token. If the underlying refresh token expires (rare), re-run `extract-token.sh` on the admin machine.
+- **Token lifecycle** — The gateway auto-refreshes each account's OAuth access token. If an account's refresh token expires (rare), re-login that account from **Dashboard -> Accounts**.
 
 ## Changelog
 

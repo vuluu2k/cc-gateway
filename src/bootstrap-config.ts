@@ -162,7 +162,7 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
     // chmod may fail on some mounted filesystems — non-fatal
   }
 
-  log('info', `Generated ${absPath} (seed client + fresh device_id)`)
+  log('info', `Generated ${absPath} (fresh device_id)`)
   log('info', '  Edit identity/env/prompt_env if you need a specific fingerprint.')
   return true
 }
@@ -173,8 +173,9 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
  *
  * Not exported: the gateway no longer treats config.yaml's `oauth:` block as
  * live runtime state (accounts.ts + SQLite do), so the only remaining writer
- * is syncOAuthFromCredentialsIfChanged below, keeping the bootstrap/migration
- * seed fresh before the (not yet wired) accounts migration reads it.
+ * is syncOAuthFromCredentialsIfChanged below, keeping the seed fresh for the
+ * one-time accounts migration (migrate-accounts.ts). Once that has run, this
+ * block is never read again.
  */
 function writeConfigOAuth(
   configPath: string,
@@ -235,10 +236,10 @@ export function updateConfigEnvVersion(configPath: string, version: string): voi
  * the case where the host re-logged in to Claude and rotated the refresh token.
  *
  * Only syncs when the mounted credentials are actually newer than config.yaml.
- * The gateway rotates refresh_tokens at runtime and persists them back to
- * config.yaml, so a mounted credentials.json from a past `claude login` will
- * usually be STALE relative to config.yaml — overwriting blindly would replay
- * a consumed refresh_token and brick auth on every restart.
+ * It only matters before the one-time accounts migration: afterwards tokens
+ * live (and rotate) in the database and config.yaml's oauth block is ignored.
+ * A mounted credentials.json from a past `claude login` can be STALE relative
+ * to config.yaml — overwriting blindly would import a consumed refresh_token.
  */
 export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
   const absPath = resolve(configPath)

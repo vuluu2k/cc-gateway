@@ -18,7 +18,7 @@ if [[ -f "$CONFIG" ]]; then
   fi
   echo ""
   echo "Gateway running. Add clients with:"
-  echo "  bash scripts/add-client.sh <name>"
+  echo "  Add clients from the admin dashboard: Clients -> + Add client"
   exit 0
 fi
 
@@ -190,7 +190,6 @@ echo "  Gateway:        ${GATEWAY_URL}"
 echo "  Admin launcher: ./clients/cc-${ADMIN_NAME}"
 echo "  Health check:   curl ${GATEWAY_URL}/_health"
 echo ""
-echo "  Add more clients:"
-echo "    bash scripts/add-client.sh alice"
-echo "    bash scripts/add-client.sh bob"
-echo "  Then send ./clients/cc-<name> to each user."
+echo "  Add more clients and accounts from the admin dashboard (${GATEWAY_URL}/admin):"
+echo "    Accounts -> Add account, Clients -> + Add client, then assign accounts to each client."
+echo "  The first admin is created with the setup code printed in the gateway log."
