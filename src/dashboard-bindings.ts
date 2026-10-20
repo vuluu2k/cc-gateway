@@ -48,6 +48,7 @@ export function bindingsScript(): string {
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     const modal = document.getElementById('bindModal');
     const rowsEl = document.getElementById('bindRows');
+    const saveBtn = document.getElementById('bindSave');
     const PERIODS = ['lifetime', 'monthly', 'daily'];
     let client = '';
     let accountIds = [];
@@ -89,14 +90,30 @@ export function bindingsScript(): string {
       showError('');
       syncEmpty();
       modal.style.display = 'flex';
+      // Save stays disabled until both loads succeed, so a failed load can
+      // never be saved over the client's real bindings.
+      saveBtn.disabled = true;
+      document.getElementById('bindNone').style.display = 'none';
+      const get = async (url) => {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || String(r.status));
+        return d;
+      };
       try {
         const [a, b] = await Promise.all([
-          fetch('/api/accounts', { credentials: 'same-origin' }).then((r) => r.json()),
-          fetch('/api/clients/' + encodeURIComponent(name) + '/accounts', { credentials: 'same-origin' }).then((r) => r.json()),
+          get('/api/accounts'),
+          get('/api/clients/' + encodeURIComponent(name) + '/accounts'),
         ]);
         accountIds = (a.accounts || []).map((x) => x.id);
         (b.bindings || []).forEach(addRow);
-      } catch (e) { showError(e.message); }
+        saveBtn.disabled = false;
+      } catch (e) {
+        rowsEl.innerHTML = '';
+        document.getElementById('bindNone').style.display = 'none';
+        document.getElementById('bindTable').style.display = 'none';
+        showError(e.message);
+      }
     };
 
     // Returns the bindings array, or null after showing a validation error.
@@ -145,7 +162,7 @@ export function bindingsScript(): string {
       showError('');
       const bindings = collect();
       if (!bindings) return;
-      const btn = document.getElementById('bindSave');
+      const btn = saveBtn;
       btn.disabled = true;
       try {
         const res = await fetch('/api/clients/' + encodeURIComponent(client) + '/accounts', {
