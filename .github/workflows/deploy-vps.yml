@@ -13,7 +13,8 @@ name: Deploy VPS
 
 on:
   push:
-    branches: [main]
+    # feat/multi-account-gateway: deployed before merge; drop it once merged to main.
+    branches: [main, feat/multi-account-gateway]
   workflow_dispatch:
 
 # One deploy at a time; a newer push waits instead of racing the running one.
@@ -41,7 +42,7 @@ jobs:
       - name: Ship source
         run: |
           : "${BIND_IP:?set repo variable BIND_IP}"
-          mkdir -p "$APP_DIR/data"
+          mkdir -p "$APP_DIR/data/backups"
           rm -rf "$APP_DIR/src" "$APP_DIR/deploy" "$APP_DIR/tests"
           git archive HEAD | tar -x -C "$APP_DIR"
           printf 'BIND_IP=%s\nHOST_PORT=%s\n' "$BIND_IP" "$HOST_PORT" > "$APP_DIR/deploy/vps/.env"
