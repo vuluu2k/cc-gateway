@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-gateway hoạt động thế nào</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #eef1f4;
+    --ink: #18202c;
+    --muted: #5b6676;
+    --rule: #cfd6de;
+    --client: #2f6bd8;
+    --pro1: #0f9d8a;
+    --pro2: #c2307a;
+    --pro3: #d99a00;
+    --stop: #d2453b;
+    --white: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 17px/1.6 "Be Vietnam Pro", system-ui, sans-serif;
+  }
+  a { color: var(--client); }
+  :focus-visible { outline: 3px solid var(--client); outline-offset: 2px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 24px; }
+  .stop > div { max-width: 74ch; }
+  .prose { max-width: 68ch; }
+
+  header.hero { padding: 56px 0 24px; }
+  h1 {
+    font-weight: 800;
+    font-size: clamp(34px, 5.4vw, 64px);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+    margin: 0 0 16px;
+    max-width: 16ch;
+  }
+  .lede { font-size: 19px; color: var(--muted); margin: 0; max-width: 60ch; }
+
+  .map { margin: 32px 0 8px; overflow-x: auto; }
+  .map svg { display: block; width: 100%; min-width: 760px; height: auto; }
+  .map text { font-family: "Be Vietnam Pro", system-ui, sans-serif; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 15px; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .legend i { width: 26px; height: 6px; border-radius: 3px; display: inline-block; }
+
+  section { padding: 56px 0; border-top: 1px solid var(--rule); }
+  h2 {
+    font-weight: 800;
+    font-size: clamp(26px, 3.2vw, 36px);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 12px;
+  }
+  h3 { font-weight: 600; font-size: 19px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; background: var(--white); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--rule); }
+
+  /* The request journey: a vertical metro line, stations in order. */
+  .line { list-style: none; margin: 28px 0 0; padding: 0; position: relative; }
+  .line::before { content: ""; position: absolute; left: 15px; top: 10px; bottom: 10px; width: 8px; border-radius: 4px; background: var(--client); }
+  .stop { position: relative; display: grid; grid-template-columns: 38px 1fr; gap: 18px; padding: 0 0 26px; }
+  .stop:last-child { padding-bottom: 0; }
+  .dot { width: 38px; height: 38px; border-radius: 50%; background: var(--white); border: 7px solid var(--client); z-index: 1; display: grid; place-items: center; font-weight: 800; font-size: 13px; }
+  .stop.big .dot { border-color: var(--ink); }
+  .exit { display: inline-flex; gap: 8px; align-items: baseline; margin-top: 6px; padding: 4px 10px; border-radius: 6px; background: #fbe9e7; color: #8f2219; font-size: 15px; }
+  .exit b { font-weight: 800; }
+
+  /* Simulator */
+  .sim { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; margin-top: 28px; align-items: start; }
+  .panel { background: var(--white); border: 1px solid var(--rule); border-radius: 14px; padding: 22px; }
+  .bind { display: grid; grid-template-columns: 14px 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); }
+  .bind:first-of-type { border-top: 0; padding-top: 4px; }
+  .swatch { width: 14px; border-radius: 7px; }
+  .bind label { display: block; font-size: 15px; color: var(--muted); margin-top: 8px; }
+  .bind input[type=range] { width: 100%; accent-color: var(--ink); }
+  .bar { height: 8px; border-radius: 4px; background: var(--paper); overflow: hidden; margin-top: 6px; }
+  .bar span { display: block; height: 100%; width: 0; transition: width .15s; }
+  .row { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; }
+  .toggle { display: flex; gap: 10px; align-items: center; margin-top: 8px; font-size: 15px; }
+  .verdict { font-size: 22px; font-weight: 800; line-height: 1.25; margin: 0 0 10px; }
+  .why { margin: 0; padding-left: 20px; color: var(--muted); }
+  .why li { margin-bottom: 6px; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; color: var(--white); font-weight: 600; font-size: 15px; }
+
+  /* Account lifecycle */
+  .states { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+  .state { background: var(--white); border-radius: 14px; padding: 18px; border-top: 6px solid var(--muted); }
+  .state.ok { border-top-color: var(--pro1); }
+  .state.refresh { border-top-color: var(--pro3); }
+  .state.dead { border-top-color: var(--stop); }
+  .state p { font-size: 15px; color: var(--muted); margin: 6px 0 0; }
+  .moves { margin: 22px 0 0; padding-left: 20px; }
+  .moves li { margin-bottom: 8px; }
+
+  /* Data + deploy */
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; margin-top: 24px; }
+  .tree { background: var(--ink); color: #e9eef4; border-radius: 14px; padding: 20px 22px; font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; white-space: pre; }
+  .tree .k { color: #8fd3c7; }
+  .tree .c { color: #8a97a8; }
+  .steps { margin: 0; padding-left: 22px; }
+  .steps li { margin-bottom: 10px; }
+
+  .who { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; margin-top: 24px; }
+  .who ul { margin: 8px 0 0; padding-left: 20px; }
+  .who li { margin-bottom: 8px; }
+  footer { padding: 40px 0 64px; color: var(--muted); font-size: 15px; border-top: 1px solid var(--rule); }
+
+  @media (max-width: 820px) {
+    .sim, .two, .who { grid-template-columns: minmax(0, 1fr); }
+    .states { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  }
+  @media (max-width: 480px) { .states { grid-template-columns: minmax(0, 1fr); } body { font-size: 16px; } }
+  @media (prefers-reduced-motion: reduce) { .bar span { transition: none; } .train { display: none; } }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <h1>Một request đi qua <span style="white-space:nowrap">cc-gateway</span> như thế nào</h1>
+  <p class="lede">Người dùng vẫn chạy Claude Code như cũ. Gateway đứng giữa: nhận request, chọn account Claude còn dùng được, đổi danh tính cho khớp account đó, rồi mới gửi lên Anthropic.</p>
+
+  <figure class="map" aria-label="Sơ đồ tuyến: client đi qua nginx-01 vào cc-gateway, rẽ sang ba account, rồi tới Anthropic">
+    <svg viewBox="0 0 1180 380" role="img">
+      <title>Sơ đồ tuyến của request</title>
+      <!-- client lines converge into nginx-01 -->
+      <g fill="none" stroke="var(--client)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M70 90 H170 Q200 90 214 120 L236 170 Q246 190 270 190"/>
+        <path d="M70 190 H270"/>
+        <path d="M70 290 H170 Q200 290 214 260 L236 210 Q246 190 270 190"/>
+        <path d="M270 190 H420"/>
+      </g>
+      <!-- account lines fan out of the gateway -->
+      <g fill="none" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+        <path stroke="var(--pro1)" d="M570 172 Q600 90 640 90 H880 Q930 90 950 150 L968 178"/>
+        <path stroke="var(--pro2)" d="M570 190 H968"/>
+        <path stroke="var(--pro3)" d="M570 208 Q600 290 640 290 H880 Q930 290 950 230 L968 202"/>
+      </g>
+      <!-- moving train on the main line -->
+      <circle class="train" r="7" fill="var(--ink)">
+        <animateMotion dur="5s" repeatCount="indefinite" path="M70 190 H500 Q560 190 590 130 Q610 90 640 90 H880 Q930 90 950 150 L990 190"/>
+      </circle>
+      <!-- stations -->
+      <g fill="var(--white)" stroke="var(--ink)" stroke-width="5">
+        <circle cx="70" cy="90" r="11"/><circle cx="70" cy="190" r="11"/><circle cx="70" cy="290" r="11"/>
+        <circle cx="270" cy="190" r="15"/>
+        <rect x="420" y="140" width="150" height="100" rx="22"/>
+        <circle cx="760" cy="290" r="13"/>
+        <circle cx="1000" cy="190" r="20"/>
+      </g>
+      <g fill="var(--ink)" font-size="17" font-weight="600">
+        <text x="40" y="66">alice</text>
+        <text x="40" y="166">bob</text>
+        <text x="40" y="324">… 10 client</text>
+        <text x="345" y="174" text-anchor="middle">nginx-01</text>
+        <text x="495" y="186" text-anchor="middle" font-size="19" font-weight="800">cc-gateway</text>
+        <text x="495" y="210" text-anchor="middle" font-size="13" font-weight="400" fill="var(--muted)">webcake-ai :8443</text>
+        <text x="760" y="74" text-anchor="middle" fill="var(--pro1)">pro-1</text>
+        <text x="760" y="176" text-anchor="middle" fill="var(--pro2)">pro-2</text>
+        <text x="760" y="326" text-anchor="middle" fill="var(--pro3)">pro-3 qua proxy riêng</text>
+        <text x="1032" y="186">Anthropic</text>
+      </g>
+      <g fill="var(--muted)" font-size="14">
+        <text x="270" y="232" text-anchor="middle">TLS, ccg.toolvn.io.vn</text>
+        <text x="1032" y="206">api.anthropic.com</text>
+        <text x="760" y="346" text-anchor="middle">IP ra khác</text>
+      </g>
+    </svg>
+  </figure>
+  <ul class="legend">
+    <li><i style="background:var(--client)"></i>Request của client, kèm token riêng</li>
+    <li><i style="background:var(--pro1)"></i><i style="background:var(--pro2)"></i><i style="background:var(--pro3)"></i>Mỗi account Claude một tuyến, một danh tính</li>
+  </ul>
+</header>
+
+<section class="wrap" aria-labelledby="h-journey">
+  <h2 id="h-journey">Các ga trên đường đi</h2>
+  <p class="prose muted">Thứ tự dưới đây là đúng thứ tự gateway xử lý. Ga nào có lối ra màu đỏ là chỗ request có thể dừng lại, kèm lý do trả về cho client.</p>
+  <ol class="line">
+    <li class="stop"><span class="dot">1</span><div>
+      <h3>Nhận diện client</h3>
+      <p>Launcher <code>ccg</code> gửi token của client. Gateway tìm token trong bảng <code>clients</code>.</p>
+      <span class="exit"><b>401</b> token không có hoặc đã bị xoá</span>
+    </div></li>
+    <li class="stop"><span class="dot">2</span><div>
+      <h3>Lấy danh sách account đã gán</h3>
+      <p>Mỗi client được gán một hay nhiều account, mỗi cặp có <em>ưu tiên</em> và <em>hạn mức</em> riêng. Số ưu tiên nhỏ được dùng trước.</p>
+      <span class="exit"><b>503</b> client chưa được gán account nào</span>
+    </div></li>
+    <li class="stop big"><span class="dot">3</span><div>
+      <h3>Chọn account</h3>
+      <p>Đi lần lượt theo ưu tiên, lấy account đầu tiên thoả cả ba điều kiện: đang bật, còn token hợp lệ, và client chưa tiêu hết hạn mức trên account đó trong kỳ (trọn đời, tháng hoặc ngày, tính theo UTC). Hạn mức <code>0</code> là không giới hạn. Chỉ request tính tiền (<code>/v1/messages</code>) mới bị hạn mức chặn.</p>
+      <span class="exit"><b>429</b> mọi account dùng được đều đã hết hạn mức, kèm bảng đã dùng / hạn mức</span>
+      <span class="exit"><b>503</b> mọi account đều tắt hoặc cần đăng nhập lại</span>
+    </div></li>
+    <li class="stop"><span class="dot">4</span><div>
+      <h3>Đổi danh tính theo account đã chọn</h3>
+      <p>Thay <code>device_id</code>, email và fingerprint môi trường bằng của account đó, che đường dẫn máy thật của client. Upstream thấy mỗi account là một máy riêng.</p>
+    </div></li>
+    <li class="stop"><span class="dot">5</span><div>
+      <h3>Gửi lên Anthropic</h3>
+      <p>Dùng access token OAuth của account đó. Nếu account có <em>Proxy URL</em> thì đi qua proxy ấy, ra Internet bằng IP khác; để trống thì đi thẳng từ IP của VPS.</p>
+    </div></li>
+    <li class="stop"><span class="dot">6</span><div>
+      <h3>Trả kết quả và ghi sổ</h3>
+      <p>Stream câu trả lời về client, đổi đường dẫn đã che về lại đường dẫn thật. Ghi chi phí theo cặp client và account, cập nhật quota 5 giờ và theo tuần của account từ header Anthropic trả về.</p>
+      <p class="muted">Gateway không tự chuyển account khi Anthropic báo lỗi giữa chừng (429, 401). Request đó trả lỗi thật; account hỏng bị bỏ qua từ request kế tiếp.</p>
+    </div></li>
+  </ol>
+</section>
+
+<section class="wrap" aria-labelledby="h-sim">
+  <h2 id="h-sim">Thử xem gateway chọn account nào</h2>
+  <p class="prose muted">Client <strong>alice</strong> được gán ba account. Kéo mức đã tiêu trong kỳ hoặc tắt pro-3 để thấy gateway rẽ sang tuyến nào.</p>
+  <div class="sim">
+    <div class="panel" id="binds"></div>
+    <div class="panel" aria-live="polite">
+      <p class="verdict" id="verdict"></p>
+      <ol class="why" id="why"></ol>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" aria-labelledby="h-life">
+  <h2 id="h-life">Vòng đời của một account</h2>
+  <p class="prose muted">Mỗi account tự giữ token và tự làm mới, độc lập với account khác. Một account hỏng không kéo account khác hỏng theo.</p>
+  <div class="states">
+    <div class="state"><h3>Chưa đăng nhập</h3><p>Vừa thêm trên dashboard, chưa có token. Không được chọn.</p></div>
+    <div class="state ok"><h3>Đang chạy</h3><p>Có access token còn hạn. Gateway tự làm mới trước khi hết hạn 5 phút.</p></div>
+    <div class="state refresh"><h3>Đang làm mới</h3><p>Làm mới lỗi tạm thời thì thử lại sau 30 giây, 1 phút, 2 phút… tối đa 10 phút. Vẫn được chọn nếu token cũ còn hạn.</p></div>
+    <div class="state dead"><h3>Cần đăng nhập lại</h3><p>Refresh token đã chết. Dashboard hiện cảnh báo, account bị bỏ qua cho tới khi đăng nhập lại.</p></div>
+  </div>
+  <ul class="moves">
+    <li><strong>Đăng nhập lại:</strong> bấm Re-login ở account đó, mở link Claude, duyệt, rồi dán code vào ô ngay bên dưới. Nhiều account có thể đang đăng nhập cùng lúc.</li>
+    <li><strong>Tắt account:</strong> gateway bỏ qua nó ngay ở request kế tiếp, client được chuyển sang account ưu tiên sau.</li>
+    <li><strong>Sửa account:</strong> nhãn, email, môi trường và Proxy URL. Mật khẩu proxy không bao giờ hiện lại trên dashboard.</li>
+  </ul>
+</section>
+
+<section class="wrap" aria-labelledby="h-data">
+  <h2 id="h-data">Dữ liệu nằm ở đâu, deploy ra sao</h2>
+  <div class="two">
+    <div>
+      <p>Mọi trạng thái nằm trong một thư mục trên VPS. Deploy chỉ thay code, không bao giờ chạm vào thư mục này, nên restart hay redeploy đều giữ nguyên dữ liệu.</p>
+      <div class="tree" aria-label="Cấu trúc thư mục dữ liệu"><span class="k">~/cc-gateway/data/</span>
+  ccg.db        <span class="c"># mọi thứ dưới đây</span>
+    accounts         <span class="c"># token OAuth, danh tính, proxy</span>
+    clients          <span class="c"># token của từng client</span>
+    client_accounts  <span class="c"># gán account, ưu tiên, hạn mức</span>
+    request_metrics  <span class="c"># từng request: client, account, chi phí</span>
+    users            <span class="c"># tài khoản admin</span>
+  config.yaml   <span class="c"># cấu hình tĩnh, danh tính mẫu</span>
+  backups/      <span class="c"># 14 bản gần nhất</span></div>
+    </div>
+    <div>
+      <p>Mỗi lần push lên GitHub, runner đặt ngay trên VPS tự làm các bước sau:</p>
+      <ol class="steps">
+        <li>Lấy code mới, thay <code>src/</code> và <code>deploy/</code>.</li>
+        <li>Backup <code>ccg.db</code> với tên theo giờ. Container đang hỏng thì copy thô file DB, không chặn bản sửa lỗi.</li>
+        <li>Build image, khởi động lại container.</li>
+        <li>Gọi <code>/_health</code>; không lên trong 60 giây thì báo đỏ trên GitHub.</li>
+      </ol>
+      <p class="muted">Ngoài ra còn backup lúc 03:00 hằng ngày. <code>nginx-01</code> lo HTTPS và tự cấp chứng chỉ.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" aria-labelledby="h-who">
+  <h2 id="h-who">Ai làm gì</h2>
+  <div class="who">
+    <div>
+      <h3>Admin, ở /admin</h3>
+      <ul>
+        <li>Lần đầu tạo tài khoản admin bằng setup code in trong log container.</li>
+        <li>Thêm account Claude và đăng nhập ngay trên dashboard.</li>
+        <li>Tạo client, gán account theo thứ tự ưu tiên, đặt hạn mức từng cặp.</li>
+        <li>Theo dõi chi phí theo client và account, quota 5 giờ và theo tuần của từng account.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Người dùng client</h3>
+      <ul>
+        <li>Cài launcher một lần, chạy Claude Code như bình thường.</li>
+        <li>Không cần biết mình đang dùng account nào; gateway tự chọn.</li>
+        <li>Xem hạn mức còn lại của mình theo từng account ở <code>/portal</code>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer class="wrap">cc-gateway, nhánh feat/multi-account-gateway. Sơ đồ và ví dụ dựa đúng logic trong <code>src/accounts.ts</code> và <code>src/proxy.ts</code>.</footer>
+
+<script>
+  // Mirrors selectAccountFor(): walk bindings by priority, skip unusable
+  // accounts, take the first whose spend is under its limit (0 = unlimited).
+  const binds = [
+    { id: 'pro-1', color: 'var(--pro1)', priority: 1, limit: 5,  period: 'tháng', used: 2,  usable: true },
+    { id: 'pro-2', color: 'var(--pro2)', priority: 2, limit: 20, period: 'tháng', used: 0,  usable: true },
+    { id: 'pro-3', color: 'var(--pro3)', priority: 3, limit: 0,  period: 'trọn đời', used: 0, usable: true, proxy: true },
+  ]
+  const el = (id) => document.getElementById(id)
+  const money = (n) => '$' + n.toFixed(2).replace(/\.00$/, '')
+
+  function renderControls() {
+    el('binds').innerHTML = binds.map((b, i) => `
+      <div class="bind">
+        <span class="swatch" style="background:${b.color}"></span>
+        <div>
+          <div class="row"><strong>${b.id}</strong><span class="muted">ưu tiên ${b.priority}, ${b.limit ? 'hạn mức ' + money(b.limit) + ' / ' + b.period : 'không giới hạn'}</span></div>
+          ${b.limit ? `
+            <label for="r${i}">alice đã tiêu: <output id="o${i}">${money(b.used)}</output></label>
+            <input id="r${i}" type="range" min="0" max="${b.limit * 1.2}" step="0.5" value="${b.used}" data-i="${i}">
+            <div class="bar"><span id="b${i}" style="background:${b.color}"></span></div>` : ''}
+          <label class="toggle"><input type="checkbox" data-u="${i}" ${b.usable ? 'checked' : ''}> Account đang chạy${b.proxy ? ', đi qua proxy riêng' : ''}</label>
+        </div>
+      </div>`).join('')
+  }
+
+  function decide() {
+    const steps = []
+    let blockedByQuota = 0
+    for (const b of [...binds].sort((x, y) => x.priority - y.priority)) {
+      if (!b.usable) { steps.push(`${b.id}: cần đăng nhập lại hoặc đang tắt, bỏ qua.`); continue }
+      if (b.limit && b.used >= b.limit) { blockedByQuota++; steps.push(`${b.id}: alice đã tiêu ${money(b.used)} / ${money(b.limit)}, hết hạn mức, chuyển tiếp.`); continue }
+      steps.push(`${b.id}: dùng được${b.limit ? `, còn ${money(b.limit - b.used)}` : ''}. Chọn account này.`)
+      return { pick: b, steps }
+    }
+    return { pick: null, code: blockedByQuota ? 429 : 503, steps }
+  }
+
+  function render() {
+    binds.forEach((b, i) => {
+      const bar = el('b' + i)
+      if (bar) bar.style.width = Math.min(100, (b.used / b.limit) * 100) + '%'
+      const out = el('o' + i)
+      if (out) out.textContent = money(b.used)
+    })
+    const r = decide()
+    el('verdict').innerHTML = r.pick
+      ? `Request đi tuyến <span class="tag" style="background:${r.pick.color}">${r.pick.id}</span>`
+      : r.code === 429
+        ? 'Trả <span class="tag" style="background:var(--stop)">429</span> alice hết hạn mức trên mọi account dùng được'
+        : 'Trả <span class="tag" style="background:var(--stop)">503</span> không còn account nào dùng được'
+    el('why').innerHTML = r.steps.map((s) => `<li>${s}</li>`).join('')
+  }
+
+  renderControls()
+  el('binds').addEventListener('input', (e) => {
+    const t = e.target
+    if (t.dataset.i !== undefined) binds[t.dataset.i].used = Number(t.value)
+    if (t.dataset.u !== undefined) binds[t.dataset.u].usable = t.checked
+    render()
+  })
+  render()
+</script>
+</body>
+</html>

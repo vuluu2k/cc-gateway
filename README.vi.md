@@ -2,7 +2,71 @@
 
 Tài liệu tiếng Việt mô tả cách triển khai CC Gateway và cách dùng ở môi trường local. Bản tiếng Anh đầy đủ ở [`README.md`](README.md).
 
-CC Gateway là một reverse proxy đứng giữa Claude Code và Anthropic API, làm nhiệm vụ chuẩn hoá identity (device ID, email, env, headers, prompt, billing header…) để nhiều máy có thể dùng chung một subscription mà chỉ "lộ" ra một danh tính duy nhất.
+CC Gateway là một reverse proxy đứng giữa Claude Code và Anthropic API, làm nhiệm vụ chuẩn hoá identity (device ID, email, env, headers, prompt, billing header…) để nhiều máy dùng chung một hoặc nhiều account Claude, mỗi account "lộ" ra đúng một danh tính riêng.
+
+---
+
+## Cách hoạt động
+
+Người dùng vẫn chạy Claude Code như cũ. Gateway đứng giữa: chọn một account Claude còn dùng được, đổi danh tính của request cho khớp account đó, rồi gửi lên Anthropic bằng token OAuth của account đó. Bản trực quan (sơ đồ tuyến, phần thử chọn account, vòng đời account) ở [`docs/how-it-works.html`](docs/how-it-works.html), mở bằng trình duyệt.
+
+```mermaid
+flowchart LR
+  A[alice] & B[bob] & C[... các client khác] -->|token client| N[nginx / TLS]
+  N --> G{{cc-gateway}}
+  G -->|danh tính + token pro-1| U[api.anthropic.com]
+  G -->|danh tính + token pro-2| U
+  G -->|pro-3 qua proxy_url riêng| P[HTTP proxy] --> U
+```
+
+### Một request đi qua những bước nào
+
+| # | Bước | Có thể dừng với |
+|---|------|-----------------|
+| 1 | **Nhận diện client** bằng token (bảng `clients`). | `401` token không tồn tại |
+| 2 | **Lấy các account đã gán** cho client (`client_accounts`): mỗi cặp có ưu tiên (số nhỏ dùng trước) và hạn mức riêng. | `503` client chưa được gán account |
+| 3 | **Chọn account**: đi theo ưu tiên, lấy account đầu tiên đang bật, còn token hợp lệ, và client chưa tiêu hết hạn mức trên account đó trong kỳ (trọn đời / tháng / ngày, theo UTC). Hạn mức `0` = không giới hạn. Chỉ request tính tiền `/v1/messages` mới bị hạn mức chặn. | `429` mọi account dùng được đều hết hạn mức (body liệt kê đã dùng/hạn mức); `503` mọi account đều tắt hoặc cần đăng nhập lại |
+| 4 | **Đổi danh tính** sang account đã chọn: `device_id`, email, fingerprint env, prompt env; che đường dẫn máy client. | |
+| 5 | **Gửi lên Anthropic** bằng access token của account, qua `proxy_url` của account nếu có (không có thì dùng `HTTPS_PROXY` chung, không có nữa thì đi thẳng). | |
+| 6 | **Trả kết quả**, đổi đường dẫn về lại như cũ, **ghi chi phí** theo cặp (client, account), cập nhật quota 5h/tuần của account. | |
+
+Gateway **không tự chuyển account** khi Anthropic trả 429/401 giữa chừng: request đó trả lỗi thật, account hỏng bị bỏ qua từ request kế tiếp.
+
+### Vòng đời account
+
+Mỗi account tự giữ token và timer làm mới riêng; một account hỏng không kéo account khác hỏng theo.
+
+```mermaid
+stateDiagram-v2
+  [*] --> uninitialized: Thêm account (dashboard)
+  uninitialized --> ok: Re-login (mở link, dán code)
+  ok --> refreshing: 5 phút trước khi hết hạn
+  refreshing --> ok: làm mới xong
+  refreshing --> refreshing: lỗi tạm thời, thử lại 30s..10 phút
+  refreshing --> expired: refresh_token bị từ chối
+  expired --> ok: Re-login
+```
+
+Mỗi account sửa được nhãn, email, env / prompt env riêng và `proxy_url` tuỳ chọn (`http://user:pass@host:port`; mật khẩu không bao giờ hiện lại). Để trống `proxy_url` thì mọi account đi ra bằng IP của server.
+
+### Dữ liệu nằm ở đâu
+
+Toàn bộ trong `data/` (volume Docker / thư mục bind mount):
+
+| Đường dẫn | Nội dung |
+|-----------|----------|
+| `ccg.db` → `accounts` | token OAuth, danh tính, proxy của từng account |
+| `ccg.db` → `clients`, `client_accounts` | token client; gán account kèm ưu tiên + hạn mức |
+| `ccg.db` → `request_metrics`, `users`, `meta` | chi phí từng request, tài khoản admin, trạng thái setup |
+| `config.yaml` | cấu hình tĩnh + danh tính mẫu cho account mới |
+| `backups/` | bản backup SQLite (deploy VPS giữ 14 bản) |
+
+`oauth:` / `auth.tokens` trong `config.yaml` chỉ được đọc **một lần** để chuyển bản cài một-account cũ vào DB. Sau đó sửa chúng không còn tác dụng; mọi thứ quản lý trên dashboard. Deploy lên VPS: xem [`deploy/vps/README.md`](deploy/vps/README.md).
+
+### Ai làm gì
+
+- **Admin** (`/admin`): tạo admin đầu tiên bằng setup code in trong log; thêm account và đăng nhập ngay trên dashboard; tạo client, gán account theo thứ tự ưu tiên kèm hạn mức từng cặp; theo dõi chi phí theo client/account và quota 5h/tuần của từng account.
+- **Người dùng client**: cài launcher một lần, dùng Claude Code bình thường; xem hạn mức còn lại theo từng account ở `/portal`.
 
 ---
 
@@ -217,26 +281,27 @@ Gateway expose sẵn một dashboard quản trị ở chính port 8443 (`/dashbo
 
 | Path | Mục đích |
 |---|---|
-| `/` | Redirect → `/dashboard` (nếu đã login) hoặc `/login` |
-| `/login` | Form đăng nhập admin |
-| `/dashboard` | Xem usage/cost + quản lý client |
-| `/api/clients` | REST API list/create client (cookie session) |
-| `/api/clients/<name>` | REST API delete client |
-| `/_health` | Health check (không cần login) |
+| `/` | Trang giới thiệu |
+| `/admin` | Đăng nhập admin; lần đầu (chưa có admin) là form tạo admin bằng setup code |
+| `/dashboard` | Usage/cost, mục Accounts (thêm, đăng nhập lại, sửa, proxy), mục Clients (tạo client, gán account + hạn mức) |
+| `/portal` | Trang của client: xem hạn mức còn lại theo từng account |
+| `/api/accounts`, `/api/clients` | REST API cho dashboard (cookie session admin) |
+| `/_health` | Health check (không cần login, luôn 200 khi tiến trình còn sống) |
 
 ### 4.1. Tạo user đăng nhập dashboard
 
-Lần đầu start, log sẽ cảnh báo `No dashboard users yet`. Tạo user:
+Lần đầu start (chưa có admin), log in ra **setup code** dùng một lần, hết hạn sau 24 giờ:
 
 ```bash
-# Local (dev)
-npm run add-user:dev -- admin
-
-# Trong container
-docker compose exec gateway node dist/scripts/add-user.js admin
+docker compose logs gateway | grep -i 'setup code'
 ```
 
-Script hỏi password tương tác (>= 8 ký tự), hash bằng scrypt, lưu vào SQLite (`./data/ccg.db` hoặc `config.db.path`). Sau đó truy cập `http://localhost:8443/login`.
+Mở `/admin`, nhập username, password và setup code để tạo admin đầu tiên. Hết hạn thì restart container để in code mới. Muốn tạo thêm admin bằng dòng lệnh vẫn dùng được script:
+
+```bash
+npm run add-user:dev -- admin                                   # local (dev)
+docker compose exec gateway node dist/scripts/add-user.js admin  # trong container
+```
 
 ### 4.2. Tính năng dashboard
 
@@ -257,7 +322,7 @@ cc-gateway/
 ├── src/
 │   ├── index.ts         # entrypoint, watchFile config hot-reload
 │   ├── proxy.ts         # HTTP server, route dashboard + proxy upstream
-│   ├── dashboard.ts     # HTML cho /login + /dashboard
+│   ├── dashboard.ts     # HTML cho /admin + /dashboard
 │   ├── rewriter.ts      # rewrite identity, env, prompt, headers
 │   ├── oauth.ts         # quản lý access/refresh token
 │   ├── auth.ts          # auth bằng client token (proxy) + session (dashboard)
@@ -295,7 +360,7 @@ cc-gateway/
 | Triệu chứng | Nguyên nhân & cách xử lý |
 |---|---|
 | `Error: No Claude Code credentials found` | Chưa login Claude Code lần nào. Chạy `claude` trên máy admin, hoàn tất OAuth qua trình duyệt, rồi chạy lại setup. |
-| `No dashboard users yet` ở log | Chạy `npm run add-user -- <username>` (hoặc `docker compose exec gateway node dist/scripts/add-user.js <username>`) để tạo user trước khi vào `/login`. |
+| Chưa có admin, không vào được `/admin` | Lấy setup code: `docker compose logs gateway \| grep -i 'setup code'`, rồi tạo admin ở `/admin`. Code hết hạn sau 24 giờ; restart container để in code mới. |
 | Gateway start xong nhưng client báo 401 | Token trong launcher không có trong database. Tải lại launcher từ dashboard → Clients (hoặc tạo client mới). Sửa `auth.tokens` trong `config.yaml` không còn tác dụng. |
 | Anthropic trả 401 dù vừa refresh | Đảm bảo bản đang chạy là sau commit `497f46f` (forward OAuth qua `Authorization: Bearer` + `anthropic-beta`). Build lại nếu deploy bằng Docker. |
 | Refresh token bị "consumed" sau restart | Token rotate được ghi vào `ccg.db`. Kiểm tra quyền ghi của `data/`, rồi **Re-login** account đó trong dashboard → Accounts. |

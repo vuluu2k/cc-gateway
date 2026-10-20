@@ -214,26 +214,67 @@ Uncomment the `tls` section in `config.yaml`, then download client launchers fro
 
 If all devices have Tailscale installed, run the gateway on any machine in the mesh. No TLS needed (Tailscale encrypts the tunnel), no public IP needed, no port forwarding.
 
-## Architecture
+## How It Works
 
+Clients keep running Claude Code exactly as before. The gateway sits in the middle: it picks an upstream Claude account that is still usable, rewrites the request to that account's identity, and forwards it with that account's OAuth token. For an interactive walkthrough (route map, a live account-selection simulator, account lifecycle), open [`docs/how-it-works.html`](docs/how-it-works.html) in a browser.
+
+```mermaid
+flowchart LR
+  A[alice] & B[bob] & C[... more clients] -->|client token| N[nginx / TLS]
+  N --> G{{cc-gateway}}
+  G -->|pro-1 identity + token| U[api.anthropic.com]
+  G -->|pro-2 identity + token| U
+  G -->|pro-3 via its own proxy_url| P[HTTP proxy] --> U
 ```
-Client machines                        CC Gateway                    Anthropic
-┌────────────┐                    ┌──────────────────┐
-│ ./cc-alice  │── ANTHROPIC_ ────│  Auth: x-api-key  │
-│  (launcher) │   BASE_URL       │  OAuth: auto-     │
-│  + env vars │                  │    refresh        │──── single ────▶ api.anthropic.com
-│             │                  │  Rewrite: all     │     identity
-│             │                  │    identity       │
-└────────────┘                    │  Strip: billing   │
-                                  │    header         │
-                                  │  Stream: SSE      │
-                                  │    passthrough    │
-                                  └──────────────────┘
-                                         │
-                                   platform.claude.com
-                                   (token refresh only,
-                                    from gateway IP)
+
+### One request, in order
+
+| # | Step | Can stop with |
+|---|------|---------------|
+| 1 | **Identify the client** by its token (`clients` table). | `401` unknown token |
+| 2 | **Load its account bindings** (`client_accounts`): each has a priority (lower is tried first) and its own cost limit. | `503` no account assigned |
+| 3 | **Pick an account**: walk bindings by priority, take the first that is enabled, has a valid token, and where this client's spend in the period (lifetime / monthly / daily, UTC) is under the limit. `0` = unlimited. Only billable `/v1/messages` is limit-gated. | `429` every usable account is over its limit (body lists used/limit per account); `503` every account is disabled or needs re-login |
+| 4 | **Rewrite identity** to the chosen account: `device_id`, email, env fingerprint, prompt env; mask client paths. | |
+| 5 | **Forward** with the account's OAuth access token, through the account's `proxy_url` if set (otherwise the global `HTTPS_PROXY`, otherwise direct). | |
+| 6 | **Stream back**, un-mask paths, **record** cost per (client, account), and capture that account's 5h/weekly rate-limit headers. | |
+
+There is **no automatic failover** on an upstream 429/401: that request returns the real error, and a dead account is skipped from the next request on.
+
+### Accounts
+
+Each account keeps its own tokens and refresh timer, so one broken account never affects another.
+
+```mermaid
+stateDiagram-v2
+  [*] --> uninitialized: Add account (dashboard)
+  uninitialized --> ok: Re-login (open link, paste code)
+  ok --> refreshing: 5 min before expiry
+  refreshing --> ok: refreshed
+  refreshing --> refreshing: transient error, retry 30s..10min
+  refreshing --> expired: refresh_token rejected
+  expired --> ok: Re-login
 ```
+
+Per account you can edit label, email, env / prompt env overrides and an optional `proxy_url` (`http://user:pass@host:port`; the password is never shown back).
+
+### Where state lives
+
+Everything is in `data/` (the Docker volume / bind mount):
+
+| Path | Contents |
+|------|----------|
+| `ccg.db` → `accounts` | OAuth tokens, identity, proxy per account |
+| `ccg.db` → `clients`, `client_accounts` | client tokens; bindings with priority + limit |
+| `ccg.db` → `request_metrics`, `users`, `meta` | per-request cost, admin users, setup state |
+| `config.yaml` | static settings + identity template for new accounts |
+| `backups/` | SQLite backups (VPS deploy keeps 14) |
+
+`config.yaml`'s `oauth:` / `auth.tokens` are only read once, to migrate an old single-account install into the DB.
+
+### Who does what
+
+- **Admin** (`/admin`): first admin via the setup code printed in the logs; add accounts and log them in from the dashboard; create clients, assign accounts in priority order with per-pair limits; watch cost per client/account and each account's 5h/weekly quota.
+- **Client user**: install the launcher once and use Claude Code normally; see remaining quota per account at `/portal`.
 
 **Defense in depth:**
 
@@ -241,7 +282,7 @@ Client machines                        CC Gateway                    Anthropic
 |-------|-----------|-----------------|
 | Launcher env vars | `ANTHROPIC_BASE_URL` + `DISABLE_NONESSENTIAL` + `ATTRIBUTION_HEADER=false` | CC voluntarily routes to gateway, disables side channels, skips billing hash |
 | Clash (optional) | Domain-based REJECT rules | Any accidental or future direct connections to Anthropic |
-| Gateway | Body + header + prompt rewriting | All 40+ fingerprint dimensions normalized to one device |
+| Gateway | Body + header + prompt rewriting | 40+ fingerprint dimensions normalized to the chosen account's identity |
 
 ## OAuth Lifecycle
 
