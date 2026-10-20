@@ -383,6 +383,9 @@ ${i18nHead()}
   .quota-bar > span.warn { background: var(--warn); }
   .quota-bar > span.err { background: var(--err); }
   .quota-win .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .quota-acct { margin: 14px 0 8px; font-size: 13px; font-weight: 600; }
+  .quota-acct:first-child { margin-top: 0; }
+  .quota-acct .meta { margin-left: 6px; font-weight: 400; }
   .quota-raw { margin-top: 12px; }
   .quota-raw summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   .quota-raw table { margin-top: 8px; }
@@ -507,11 +510,10 @@ ${i18nHead()}
     </div>
     <div class="row" id="topStats"></div>
     <section id="quota" class="card">
-      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic account</h2>
+      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
       <p class="meta" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
-        Live 5-hour rolling and weekly usage for the shared subscription account,
-        read from Anthropic's response headers. This is the whole account's quota,
-        shared across every client on this gateway.
+        Live 5-hour rolling and weekly usage per upstream subscription account,
+        read from Anthropic's response headers on that account's last request.
       </p>
       <div id="quotaBody"></div>
       <h2 style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
@@ -979,12 +981,24 @@ ${renderBindingsModal()}
     return sec + 's';
   };
 
+  // One block per upstream account: each has its own 5h/weekly windows.
   const renderQuota = (data) => {
     const host = document.getElementById('quotaBody');
-    const q = data.quota;
-    if (!q || !q.windows || !q.windows.length) {
+    const quotas = data.quotas || {};
+    const accounts = data.accounts || [];
+    if (!accounts.some(a => quotas[a.id])) {
       host.innerHTML = '<div class="empty">' + esc(t('admin.quota.none')) + '</div>';
       return;
+    }
+    host.innerHTML = accounts.map(a =>
+      '<div class="quota-acct"><code>' + esc(a.id) + '</code>'
+        + (a.label ? '<span class="meta">' + esc(a.label) + '</span>' : '') + '</div>'
+        + quotaBlock(quotas[a.id])).join('');
+  };
+
+  const quotaBlock = (q) => {
+    if (!q || !q.windows || !q.windows.length) {
+      return '<div class="empty">' + esc(t('admin.quota.noneAccount')) + '</div>';
     }
     const winLabel = { '5h': t('admin.quota.win5h'), '7d': t('admin.quota.win7d') };
     const repKey = q.representative === 'seven_day' ? '7d'
@@ -1023,7 +1037,7 @@ ${renderBindingsModal()}
       ? \`<details class="quota-raw"><summary>\${esc(t('admin.quota.rawSummary'))}</summary>
           <table><tbody>\${rawRows}</tbody></table></details>\`
       : '';
-    host.innerHTML = '<div class="quota-grid">' + cards + '</div>' + raw;
+    return '<div class="quota-grid">' + cards + '</div>' + raw;
   };
 
   const tickQuotaResets = () => {

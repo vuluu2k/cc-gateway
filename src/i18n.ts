@@ -302,13 +302,14 @@ const M: Record<string, Entry> = {
   'admin.toolbar.fetchErr': { en: 'fetch error', vi: 'lỗi tải', zh: '获取出错' },
   // section titles
   'admin.sec.periods': { en: 'Cost & usage by period', vi: 'Chi phí & mức dùng theo kỳ', zh: '按周期的费用与用量' },
-  'admin.sec.quota': { en: 'Session quota · Anthropic account', vi: 'Hạn mức session · tài khoản Anthropic', zh: '会话额度 · Anthropic 账户' },
+  'admin.sec.quota': { en: 'Session quota · Anthropic accounts', vi: 'Hạn mức session · các tài khoản Anthropic', zh: '会话额度 · Anthropic 账户' },
   'admin.sec.sessionModels': { en: 'Models used this session (5h)', vi: 'Model đã dùng trong session (5h)', zh: '本次会话使用的模型（5小时）' },
   'admin.quota.note': {
-    en: "Live 5-hour rolling and weekly usage for the shared subscription account, read from Anthropic's response headers. This is the whole account's quota, shared across every client on this gateway.",
-    vi: 'Mức dùng theo cửa sổ 5 giờ và theo tuần của tài khoản gói dùng chung, đọc từ header phản hồi của Anthropic. Đây là hạn mức của cả tài khoản, dùng chung cho mọi client trên cổng này.',
-    zh: '共享订阅账户的 5 小时滚动窗口和每周用量，读取自 Anthropic 的响应头。这是整个账户的额度，由本网关上的所有客户端共享。',
+    en: "Live 5-hour rolling and weekly usage per upstream subscription account, read from Anthropic's response headers on that account's last request. Each account has its own windows, shared by every client bound to it.",
+    vi: 'Mức dùng theo cửa sổ 5 giờ và theo tuần của từng tài khoản gói upstream, đọc từ header phản hồi của Anthropic ở yêu cầu gần nhất của tài khoản đó. Mỗi tài khoản có cửa sổ riêng, dùng chung cho mọi client được gán vào nó.',
+    zh: '每个上游订阅账户的 5 小时滚动窗口和每周用量，读取自该账户最近一次请求的 Anthropic 响应头。每个账户有自己的窗口，由绑定到它的所有客户端共享。',
   },
+  'admin.quota.noneAccount': { en: 'No quota headers captured for this account yet.', vi: 'Chưa bắt được header hạn mức cho tài khoản này.', zh: '尚未捕获该账户的额度响应头。' },
   'admin.quota.none': { en: 'No quota headers captured yet — make a request through the gateway.', vi: 'Chưa bắt được header hạn mức — hãy gửi một yêu cầu qua cổng.', zh: '尚未捕获额度响应头 — 请通过网关发起一次请求。' },
   'admin.quota.win5h': { en: 'Session · 5-hour window', vi: 'Session · cửa sổ 5 giờ', zh: '会话 · 5 小时窗口' },
   'admin.quota.win7d': { en: 'Weekly · 7-day window', vi: 'Tuần · cửa sổ 7 ngày', zh: '每周 · 7 天窗口' },

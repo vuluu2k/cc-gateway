@@ -1,6 +1,6 @@
 import { getDb } from './db.js'
 import { stripSyntheticBlocks } from './preview.js'
-import { getRateLimitSnapshot } from './ratelimit.js'
+import { getRateLimitSnapshots } from './ratelimit.js'
 
 const MINUTE_MS = 60_000
 const HOUR_MS = 3_600_000
@@ -584,12 +584,16 @@ export function getMetricsSnapshot() {
     }
   })
 
-  // Account-wide Claude subscription quota (5h + weekly) from the latest upstream
-  // response headers, plus the models exercised within the current 5h session
-  // window. sessionStart comes from the quota's 5h reset when available, else a
-  // plain "last 5 hours" fallback so the panel still works before any headers land.
-  const quota = getRateLimitSnapshot()
-  const sessionStart = quota?.sessionWindowStartMs ?? now - 5 * HOUR_MS
+  // Claude subscription quota (5h + weekly) per upstream account, from each
+  // account's latest response headers, plus the models exercised within the
+  // current 5h session window. sessionStart is the earliest 5h window start
+  // across accounts (so every account's session is covered), else a plain
+  // "last 5 hours" fallback so the panel still works before any headers land.
+  const quotas = getRateLimitSnapshots()
+  const starts = Object.values(quotas)
+    .map((q) => q.sessionWindowStartMs)
+    .filter((v): v is number => v != null)
+  const sessionStart = starts.length ? Math.min(...starts) : now - 5 * HOUR_MS
   const sessionModels = getSessionModels(sessionStart)
 
   return {
@@ -602,7 +606,7 @@ export function getMetricsSnapshot() {
     minuteSeries,
     hourSeries,
     recent,
-    quota,
+    quotas,
     sessionStart,
     sessionModels,
   }

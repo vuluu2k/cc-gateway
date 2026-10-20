@@ -347,17 +347,17 @@ async function handleRequest(
     (proxyRes) => {
       const status = proxyRes.statusCode || 502
 
-      // Snapshot the account-wide quota headers (anthropic-ratelimit-unified-*)
+      // Snapshot this account's quota headers (anthropic-ratelimit-unified-*)
       // Anthropic returns on every /v1/messages response — the dashboard surfaces
-      // 5h/weekly "session used %" and reset times from this. No-op when absent.
-      captureRateLimitHeaders(proxyRes.headers)
+      // 5h/weekly "session used %" and reset times per account. No-op when absent.
+      captureRateLimitHeaders(accountId, proxyRes.headers)
 
       // Surface upstream throttling distinctly from the gateway's own
       // cost-limit 429 (handled above). Anthropic returns 429 (rate_limit_error)
-      // or 529 (overloaded) when our shared OAuth account hits its rate cap; the
+      // or 529 (overloaded) when the selected OAuth account hits its rate cap; the
       // client retries per retry-after and usually gets 200 on the next attempt,
       // which is the "429 rồi lại 200" pattern. Logging it explicitly makes the
-      // shared-account throttling visible instead of looking like a cost block.
+      // per-account throttling visible instead of looking like a cost block.
       if (status === 429 || status === 529) {
         const retryAfter = proxyRes.headers['retry-after']
         // Anthropic tells us exactly which bucket is exhausted via its
@@ -365,13 +365,13 @@ async function handleRequest(
         // / tokens), and for OAuth/Claude-subscription accounts via the
         // anthropic-ratelimit-unified-* family (5h + weekly usage windows).
         // Surfacing them turns "mystery 429" into a named limit so we can tell a
-        // big-single-request ITPM hit apart from a shared-account usage cap.
+        // big-single-request ITPM hit apart from an account usage cap.
         const rateLimitHeaders = Object.entries(proxyRes.headers)
           .filter(([k]) => k.toLowerCase().startsWith('anthropic-ratelimit'))
           .map(([k, v]) => `${k}=${v}`)
         log(
           'warn',
-          `Upstream throttled "${clientName}": ${status} ${method} ${path}` +
+          `Upstream throttled "${clientName}" on account "${accountId}": ${status} ${method} ${path}` +
             (retryAfter ? ` (retry-after: ${retryAfter}s)` : '') +
             (rateLimitHeaders.length ? ` [${rateLimitHeaders.join(' ')}]` : ''),
         )
