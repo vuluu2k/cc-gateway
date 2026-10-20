@@ -52,13 +52,23 @@ try {
   initMetrics()
   log('info', `SQLite database: ${resolve(dbPath)}`)
 
-  // Two seeding paths, both guarded on "accounts table is empty", so at most
-  // one of them ever runs:
+  // Two seeding paths, both guarded on "this DB has never held an account"
+  // (accountSeedingClosed), so at most one of them ever runs, once:
   //   1. an existing single-account config.yaml is imported, or
   //   2. a fresh server is seeded from env/credentials.
-  // Neither is required — an empty gateway boots fine and is set up from the web.
-  migrateFromConfig(config)
-  seedAccountFromEnvIfEmpty(config)
+  // Neither is required — an empty gateway boots fine and is set up from the
+  // web — so a seeding failure is logged and boot carries on. Exiting here
+  // would crash-loop the container with the admin locked out of the dashboard.
+  for (const [name, seed] of [
+    ['config.yaml migration', () => migrateFromConfig(config)],
+    ['env account seed', () => seedAccountFromEnvIfEmpty(config)],
+  ] as const) {
+    try {
+      seed()
+    } catch (err) {
+      log('error', `${name} failed, continuing without it: ${err instanceof Error ? err.message : err}`)
+    }
+  }
 
   reloadClients()
   // Initialize every upstream account — each gets its own refresh timer. Never

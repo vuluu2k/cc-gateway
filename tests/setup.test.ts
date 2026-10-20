@@ -40,5 +40,20 @@ process.env.CCG_REFRESH_TOKEN = 'rt-env'
 assert.equal(seedAccountFromEnvIfEmpty({ identity: { device_id: 'ab'.repeat(32) } } as unknown as Config), true)
 assert.equal(seedAccountFromEnvIfEmpty({} as Config), false, 'only when empty')
 
+// deleting every account must not let the env seed resurrect "default"
+getDb().prepare(`DELETE FROM accounts`).run()
+assert.equal(seedAccountFromEnvIfEmpty({} as Config), false, 'no resurrection after delete-all')
+assert.equal((getDb().prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number }).n, 0)
+
+// a DB whose accounts were created from the dashboard (no flag yet) is closed too
+const dir2 = mkdtempSync(join(tmpdir(), 'ccg-test-'))
+initDb(join(dir2, 'dash.db'))
+getDb().prepare(`INSERT INTO accounts (id, device_id, created_at) VALUES ('web', ?, 0)`).run('ab'.repeat(32))
+assert.equal(seedAccountFromEnvIfEmpty({} as Config), false)
+getDb().prepare(`DELETE FROM accounts`).run()
+assert.equal(seedAccountFromEnvIfEmpty({} as Config), false, 'flag recorded on first sighting')
+rmSync(dir2, { recursive: true, force: true })
+delete process.env.CCG_REFRESH_TOKEN
+
 rmSync(dir, { recursive: true, force: true })
 console.log('setup tests passed')

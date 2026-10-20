@@ -4,7 +4,9 @@ import { join } from 'path'
 import { strict as assert } from 'assert'
 import { initDb, getDb } from '../src/db.js'
 import { migrateFromConfig } from '../src/migrate-accounts.js'
-import { listAccountRows, listClientRows, listBindings } from '../src/accounts-store.js'
+import {
+  listAccountRows, listClientRows, listBindings, replaceBindings, deleteAccountRow, deleteClientRow,
+} from '../src/accounts-store.js'
 import type { Config } from '../src/config.js'
 
 let passed = 0
@@ -91,6 +93,46 @@ test('chạy lần hai là no-op, không nhân đôi', () => {
   assert.equal(listAccountRows().length, 1)
   assert.equal(listClientRows().length, 2)
   assert.equal(listBindings('alice').length, 1)
+})
+
+test('xoa account da migrate roi khoi dong lai: khong nem, khong tao lai', () => {
+  // Clients still exist: re-running the import used to hit UNIQUE clients.token
+  // and crash-loop the gateway.
+  replaceBindings('alice', [])
+  replaceBindings('bob', [])
+  deleteAccountRow('default')
+  assert.doesNotThrow(() => migrateFromConfig(legacyConfig))
+  assert.equal(listAccountRows().length, 0)
+  assert.equal(listClientRows().length, 2)
+
+  // Clients deleted too: re-running used to resurrect them with revoked tokens.
+  deleteClientRow('alice')
+  deleteClientRow('bob')
+  assert.equal(migrateFromConfig(legacyConfig), false)
+  assert.equal(listAccountRows().length, 0)
+  assert.equal(listClientRows().length, 0)
+})
+
+test('DB cu chi co co migrated_multi_account van duoc chan', () => {
+  const dir4 = mkdtempSync(join(tmpdir(), 'ccg-test-'))
+  initDb(join(dir4, 'old.db'))
+  getDb().prepare(`INSERT INTO meta (key, value) VALUES ('migrated_multi_account', '1')`).run()
+  assert.equal(migrateFromConfig(legacyConfig), false)
+  assert.equal(listAccountRows().length, 0)
+  rmSync(dir4, { recursive: true, force: true })
+})
+
+test('trung token duoi hai ten thi bo qua ban sau, khong nem', () => {
+  const dir5 = mkdtempSync(join(tmpdir(), 'ccg-test-'))
+  initDb(join(dir5, 'duptok.db'))
+  const cfg = {
+    oauth: { refresh_token: 'ref-x' },
+    auth: { tokens: [{ name: 'a', token: 'same' }, { name: 'b', token: 'same' }] },
+    identity: { device_id: 'ab'.repeat(32), email: 'x@example.com' },
+  } as unknown as Config
+  assert.equal(migrateFromConfig(cfg), true)
+  assert.deepEqual(listClientRows().map((c) => c.name), ['a'])
+  rmSync(dir5, { recursive: true, force: true })
 })
 
 test('config không có oauth thì không migrate gì', () => {

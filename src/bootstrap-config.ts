@@ -2,8 +2,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'f
 import { dirname, resolve } from 'path'
 import { randomBytes } from 'crypto'
 import type { Config } from './config.js'
-import { getDb } from './db.js'
 import { insertAccountRow } from './accounts-store.js'
+import { accountSeedingClosed, markAccountsSeeded } from './migrate-accounts.js'
 import { parseDocument, YAMLMap } from 'yaml'
 import { log } from './logger.js'
 
@@ -287,12 +287,11 @@ export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
  * Create the first account from CCG_REFRESH_TOKEN or a mounted credentials.json.
  *
  * Optional convenience: it saves a browser login on a fresh server. Skipped
- * entirely when accounts already exist, including right after the config.yaml
- * migration has run.
+ * once this database has ever held an account (including right after the
+ * config.yaml migration), so deleting every account does not resurrect it.
  */
 export function seedAccountFromEnvIfEmpty(config: Config): boolean {
-  const existing = getDb().prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number }
-  if (existing.n > 0) return false
+  if (accountSeedingClosed()) return false
 
   const creds = gatherSeedCredentials()
   if (!creds?.refreshToken) return false
@@ -306,6 +305,7 @@ export function seedAccountFromEnvIfEmpty(config: Config): boolean {
     deviceId: config.identity?.device_id,
     email: config.identity?.email || '',
   })
+  markAccountsSeeded()
   log('info', 'Seeded account "default" from environment credentials')
   return true
 }
