@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { strict as assert } from 'assert'
 import { initDb } from '../src/db.js'
-import { recordRequest, getClientAccountCostSince, getClientCostSince } from '../src/metrics.js'
+import { recordRequest, getClientAccountCostSince, getClientCostSince, getAccountUsageTotals } from '../src/metrics.js'
 
 let passed = 0
 let failed = 0
@@ -54,6 +54,12 @@ test('không lẫn chi phí của client khác', () => {
 
 test('getClientCostSince vẫn là tổng mọi account', () => {
   assert.equal(getClientCostSince('alice', 0), 12)
+})
+
+test('getAccountUsageTotals cong moi client theo account', () => {
+  const totals = getAccountUsageTotals()
+  assert.deepEqual(totals['pro-1'], { costUsd: 105, requests: 3 })
+  assert.deepEqual(totals['pro-2'], { costUsd: 7, requests: 1 })
 })
 
 test('cặp chưa tiêu gì trả về 0', () => {

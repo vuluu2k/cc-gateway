@@ -135,6 +135,9 @@ function migrate(db: Database.Database) {
     'CREATE INDEX IF NOT EXISTS idx_rm_client_acct_ts ON request_metrics(client, account_id, ts)',
   )
 
+  // Covering index for the per-account usage totals on the Accounts list.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_rm_account_cost ON request_metrics(account_id, cost_usd)')
+
   db.exec('CREATE INDEX IF NOT EXISTS idx_rm_model_ts ON request_metrics(model, ts)')
 }
 

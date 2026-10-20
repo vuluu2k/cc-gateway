@@ -120,6 +120,17 @@ export function getClientAccountCostSince(
   }
 }
 
+/** Lifetime spend and request count per account id (covered by idx_rm_account_cost). */
+export function getAccountUsageTotals(): Record<string, { costUsd: number; requests: number }> {
+  const rows = getDb()
+    .prepare(
+      `SELECT account_id, SUM(cost_usd) AS cost, COUNT(*) AS n
+       FROM request_metrics WHERE account_id != '' GROUP BY account_id`,
+    )
+    .all() as Array<{ account_id: string; cost: number | null; n: number }>
+  return Object.fromEntries(rows.map((r) => [r.account_id, { costUsd: r.cost || 0, requests: r.n }]))
+}
+
 /**
  * Resolve the start-of-window timestamp for a cost-limit period.
  * UTC-based for stability across server timezones.

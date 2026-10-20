@@ -24,7 +24,7 @@ import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer,
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getAccountUsageTotals, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { captureRateLimitHeaders } from './ratelimit.js'
@@ -697,6 +697,12 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
 // nested object would reach the outgoing request fingerprint unchecked.
 const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv'] as const
 
+/** Account views plus lifetime spend per account (spec 8.1). */
+function accountsWithUsage() {
+  const usage = getAccountUsageTotals()
+  return listAccounts().map((a) => ({ ...a, usage: usage[a.id] || { costUsd: 0, requests: 0 } }))
+}
+
 function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Body must be a JSON object')
   const src = raw as Record<string, unknown>
@@ -869,7 +875,8 @@ async function handleDashboardArea(
   // manual paste flow). Every login route names its account explicitly.
   if (pathname === '/api/accounts' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify({ accounts: listAccounts() }))
+    // defaultEmail lets the UI flag accounts still on the gateway's template identity.
+    res.end(JSON.stringify({ accounts: accountsWithUsage(), defaultEmail: config.identity.email || '' }))
     return
   }
 
@@ -979,7 +986,7 @@ async function handleDashboardArea(
         const done = await completeLogin(id, code)
         log('info', `User "${session.u}" completed an OAuth login for account "${id}"`)
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, ...done, accounts: listAccounts() }))
+        res.end(JSON.stringify({ ok: true, ...done, accounts: accountsWithUsage() }))
       } catch (err) {
         fail(400, err)
       }

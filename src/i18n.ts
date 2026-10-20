@@ -402,6 +402,31 @@ const M: Record<string, Entry> = {
     vi: 'Chưa có tài khoản nào - thêm một cái để bắt đầu',
     zh: '还没有账户 - 添加一个即可开始代理',
   },
+  'acct.emailPlaceholder': { en: 'Email (optional)', vi: 'Email (không bắt buộc)', zh: '邮箱（可选）' },
+  'acct.usage': { en: 'Usage', vi: 'Đã dùng', zh: '用量' },
+  'acct.usageRequests': { en: '{n} requests in total', vi: 'Tổng cộng {n} yêu cầu', zh: '共 {n} 次请求' },
+  'acct.edit': { en: 'Edit', vi: 'Sửa', zh: '编辑' },
+  'acct.envLabel': {
+    en: 'env (JSON object, empty = inherit gateway default)',
+    vi: 'env (đối tượng JSON, để trống = dùng mặc định của cổng)',
+    zh: 'env（JSON 对象，留空 = 继承网关默认值）',
+  },
+  'acct.promptEnvLabel': {
+    en: 'prompt_env (JSON object, empty = inherit gateway default)',
+    vi: 'prompt_env (đối tượng JSON, để trống = dùng mặc định của cổng)',
+    zh: 'prompt_env（JSON 对象，留空 = 继承网关默认值）',
+  },
+  'acct.badJson': {
+    en: '{field} must be a JSON object, or empty to inherit',
+    vi: '{field} phải là một đối tượng JSON, hoặc để trống để kế thừa',
+    zh: '{field} 必须是 JSON 对象，或留空以继承',
+  },
+  'acct.defaultIdentity': { en: 'shared identity', vi: 'định danh dùng chung', zh: '共享身份' },
+  'acct.defaultIdentityHint': {
+    en: 'This email is empty, the gateway default, or used by another account, so upstream sees the same identity. Edit it to a distinct email.',
+    vi: 'Email này trống, là mặc định của cổng, hoặc trùng với tài khoản khác, nên upstream thấy cùng một định danh. Hãy sửa thành một email riêng.',
+    zh: '该邮箱为空、为网关默认值或与其他账户重复，上游会看到同一身份。请改为一个独立的邮箱。',
+  },
   'acct.idPlaceholder': { en: 'e.g. pro-1', vi: 'ví dụ: pro-1', zh: '例如 pro-1' },
   'acct.loginStep1': {
     en: 'Open this URL, approve, then paste the code back here',
