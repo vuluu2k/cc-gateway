@@ -353,6 +353,7 @@ const M: Record<string, Entry> = {
   // ── admin: OAuth re-login ──
   'admin.oauth.bannerExpired': { en: 'Claude account sign-in expired — the gateway is returning 503 for every request.', vi: 'Phiên đăng nhập tài khoản Claude đã hết hạn — gateway đang trả 503 cho mọi yêu cầu.', zh: 'Claude 账户登录已过期 — 网关正对所有请求返回 503。' },
   'admin.oauth.bannerRefreshing': { en: 'Claude account token is being refreshed — requests may fail until it succeeds.', vi: 'Đang làm mới token tài khoản Claude — yêu cầu có thể lỗi cho tới khi xong.', zh: '正在刷新 Claude 账户令牌 — 完成前请求可能失败。' },
+  'admin.oauth.someExpired': { en: 'These accounts need re-login: {names}', vi: 'Các tài khoản này cần đăng nhập lại: {names}', zh: '这些账户需要重新登录：{names}' },
   'admin.oauth.reloginBtn': { en: 'Re-login with Claude', vi: 'Đăng nhập lại với Claude', zh: '重新登录 Claude' },
   'admin.oauth.detail': { en: 'Details: {error}', vi: 'Chi tiết: {error}', zh: '详情：{error}' },
   'admin.modal.oauth.title': { en: 'Re-login with Claude', vi: 'Đăng nhập lại với Claude', zh: '重新登录 Claude' },

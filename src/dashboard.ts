@@ -1457,7 +1457,7 @@ ${i18nHead()}
         return;
       }
       currentData = await res.json();
-      renderOAuthBanner(currentData.oauth);
+      renderOAuthBanner(currentData.accounts);
       renderTopStats(currentData);
       renderPeriods(currentData);
       renderCharts(currentData);
@@ -1476,18 +1476,18 @@ ${i18nHead()}
   // The gateway proxies one shared Claude account. When its refresh_token dies
   // every /v1/* call 503s, so surface that here with a one-click recovery
   // instead of making the admin edit config.yaml and restart the container.
-  const renderOAuthBanner = (oauth) => {
+  let oaTargetId = null;
+  const renderOAuthBanner = (accounts) => {
     const banner = document.getElementById('oauthBanner');
-    if (!oauth || oauth.state === 'ok' || oauth.state === 'uninitialized') {
+    const expired = (accounts || []).filter((a) => a.state === 'expired');
+    if (!expired.length) {
+      oaTargetId = null;
       banner.style.display = 'none';
       return;
     }
-    const msgKey = oauth.state === 'expired'
-      ? 'admin.oauth.bannerExpired'
-      : 'admin.oauth.bannerRefreshing';
-    let msg = t(msgKey);
-    if (oauth.last_error) msg += ' ' + t('admin.oauth.detail', { error: oauth.last_error });
-    document.getElementById('oauthBannerMsg').textContent = msg;
+    oaTargetId = expired[0].id;
+    document.getElementById('oauthBannerMsg').textContent =
+      t('admin.oauth.someExpired', { names: expired.map((a) => a.label || a.id).join(', ') });
     banner.style.display = 'flex';
   };
 
@@ -1514,12 +1514,13 @@ ${i18nHead()}
     document.getElementById('oauthModal').style.display = 'none';
   };
   const startOauthLogin = async () => {
+    if (!oaTargetId) return;
     const btn = document.getElementById('oaLink');
     btn.disabled = true;
     showOaError(null);
     showOaOk(null);
     try {
-      const res = await fetch('/api/oauth/login', { method: 'POST', credentials: 'same-origin' });
+      const res = await fetch('/api/accounts/' + encodeURIComponent(oaTargetId) + '/login', { method: 'POST', credentials: 'same-origin' });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         showOaError(t('admin.modal.oauth.linkErr', { error: err.error || res.status }));
@@ -1539,6 +1540,7 @@ ${i18nHead()}
     }
   };
   const submitOauthCode = async () => {
+    if (!oaTargetId) return;
     if (!oaLinkReady) { showOaError(t('admin.modal.oauth.needLink')); return; }
     const code = document.getElementById('oaCode').value.trim();
     if (!code) { showOaError(t('admin.modal.oauth.needCode')); return; }
@@ -1547,7 +1549,7 @@ ${i18nHead()}
     showOaError(null);
     showOaOk(t('admin.modal.oauth.working'));
     try {
-      const res = await fetch('/api/oauth/complete', {
+      const res = await fetch('/api/accounts/' + encodeURIComponent(oaTargetId) + '/complete', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -1560,7 +1562,7 @@ ${i18nHead()}
         return;
       }
       showOaOk(t('admin.modal.oauth.ok', { time: new Date(data.expires_at).toLocaleTimeString() }));
-      renderOAuthBanner(data.status);
+      renderOAuthBanner(data.accounts);
       setTimeout(() => { closeOauthModal(); refresh(); }, 1200);
     } catch (e) {
       showOaOk(null);

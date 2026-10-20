@@ -9,6 +9,10 @@ import { authenticate, reloadClients } from './auth.js'
 import { listAccountRows, listClientRows, listBindings } from './accounts-store.js'
 import {
   listAccounts,
+  getAccountView,
+  createAccount,
+  updateAccount,
+  deleteAccount,
   isUsable,
   beginLogin,
   completeLogin,
@@ -134,10 +138,10 @@ async function handleRequest(
     pathname === '/_metrics' ||
     pathname === '/api/clients' ||
     pathname.startsWith('/api/clients/') ||
-    pathname === '/api/oauth' ||
-    pathname.startsWith('/api/oauth/')
+    pathname === '/api/accounts' ||
+    pathname.startsWith('/api/accounts/')
   ) {
-    await handleDashboardArea(req, res, pathname, method)
+    await handleDashboardArea(req, res, pathname, method, config)
     return
   }
 
@@ -204,8 +208,9 @@ async function handleRequest(
     const payload =
       selected.reason === 'quota'
         ? {
-            error: 'Cost limit reached on every account',
+            error: 'Cost limit reached on every usable account',
             client: clientName,
+            note: 'Accounts that are disabled or need re-login are not listed here',
             accounts: selected.blocked.map((b) => ({
               account: b.accountId,
               period: b.limitPeriod,
@@ -227,7 +232,7 @@ async function handleRequest(
 
     const detail =
       selected.reason === 'quota'
-        ? `cost limit reached on all ${selected.blocked.length} account(s)`
+        ? `cost limit reached on all ${selected.blocked.length} usable account(s)`
         : selected.reason === 'no-bindings'
           ? 'client has no account bindings'
           : 'no usable account'
@@ -675,11 +680,51 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
   return Buffer.concat(chunks)
 }
 
+// Only these five fields may be patched. `updateAccountRow` whitelists by
+// column name, and that whitelist includes refresh_token, access_token,
+// state and device_id - so handing it a raw JSON body would let an admin
+// overwrite an account's live tokens through the settings form.
+// Values inside env/promptEnv must be primitives: they are spread into
+// Config.env, which rewriter.ts reads as string | boolean | number, and a
+// nested object would reach the outgoing request fingerprint unchecked.
+const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv'] as const
+
+function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Body must be a JSON object')
+  const src = raw as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of ACCOUNT_PATCHABLE) {
+    if (!(key in src)) continue
+    const value = src[key]
+    if (key === 'enabled') {
+      if (typeof value !== 'boolean') throw new Error('enabled must be a boolean')
+      out[key] = value
+    } else if (key === 'env' || key === 'promptEnv') {
+      if (value === null) { out[key] = null; continue }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`${key} must be an object or null`)
+      }
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const t = typeof v
+        if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+          throw new Error(`${key}.${k} must be a string, number or boolean`)
+        }
+      }
+      out[key] = value
+    } else {
+      if (typeof value !== 'string') throw new Error(`${key} must be a string`)
+      out[key] = value
+    }
+  }
+  return out
+}
+
 async function handleDashboardArea(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
   method: string,
+  config: Config,
 ) {
   const secure = isSecureRequest(req)
 
@@ -779,63 +824,20 @@ async function handleDashboardArea(
   }
 
   if (pathname === '/_metrics') {
-    // TEMPORARY - Task 11 gives /_metrics a proper per-account shape.
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({ ...getMetricsSnapshot(), accounts: listAccounts() }))
     return
   }
 
-  // ── OAuth re-login (authorization code + PKCE, manual paste flow) ──
-  // Lets an admin re-authenticate an upstream Claude account from the browser
-  // when its refresh_token dies, instead of editing config.yaml and
-  // restarting the container.
-  if (pathname === '/api/oauth') {
-    if (method !== 'GET') {
-      res.writeHead(405, { Allow: 'GET' })
-      res.end()
-      return
-    }
-    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
+  // ── Account management + per-account OAuth login (authorization code + PKCE,
+  // manual paste flow). Every login route names its account explicitly.
+  if (pathname === '/api/accounts' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({ accounts: listAccounts() }))
     return
   }
 
-  if (pathname === '/api/oauth/login') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
-      res.end()
-      return
-    }
-    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    // Until then a re-login always targets the first configured account. With
-    // more than one account that guess can silently target the wrong one, so
-    // refuse rather than mis-target once a second account exists.
-    const loginAccounts = listAccounts()
-    if (loginAccounts.length > 1) {
-      res.writeHead(409, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
-      return
-    }
-    const target = loginAccounts[0]
-    if (!target) {
-      res.writeHead(404, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'No accounts configured' }))
-      return
-    }
-    const started = beginLogin(target.id)
-    log('info', `User "${session.u}" started an OAuth re-login for account "${target.id}"`)
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify(started))
-    return
-  }
-
-  if (pathname === '/api/oauth/complete') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
-      res.end()
-      return
-    }
+  if (pathname === '/api/accounts' && method === 'POST') {
     let body: Buffer
     try {
       body = await readBody(req)
@@ -844,68 +846,119 @@ async function handleDashboardArea(
       res.end(JSON.stringify({ error: 'Payload too large' }))
       return
     }
-    let code = ''
     try {
-      const parsed = JSON.parse(body.toString('utf-8'))
-      code = typeof parsed?.code === 'string' ? parsed.code : ''
-    } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Invalid JSON body' }))
-      return
-    }
-    if (!code.trim()) {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Authorization code is required' }))
-      return
-    }
-    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    // Until then a re-login always targets the first configured account. With
-    // more than one account that guess can silently overwrite a healthy
-    // account's tokens instead of fixing the broken one, so refuse rather
-    // than mis-target once a second account exists.
-    const completeAccounts = listAccounts()
-    if (completeAccounts.length > 1) {
-      res.writeHead(409, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
-      return
-    }
-    const target = completeAccounts[0]
-    if (!target) {
-      res.writeHead(404, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'No accounts configured' }))
-      return
-    }
-    try {
-      const result = await completeLogin(target.id, code)
-      log('info', `User "${session.u}" completed an OAuth re-login for account "${target.id}"`)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, ...result, accounts: listAccounts() }))
+      const input = JSON.parse(body.toString('utf-8')) as {
+        id?: string; label?: string; email?: string
+      }
+      if (!input.id) throw new Error('id is required')
+      const account = createAccount({
+        id: input.id,
+        label: input.label,
+        email: input.email || config.identity.email,
+      })
+      log('info', `Account "${account.id}" created`)
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(account))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      log('warn', `OAuth re-login by "${session.u}" failed: ${message}`)
-      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.writeHead(message.includes('already exists') ? 409 : 400, {
+        'Content-Type': 'application/json',
+      })
       res.end(JSON.stringify({ error: message }))
     }
     return
   }
 
-  if (pathname === '/api/oauth/cancel') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
+  if (pathname.startsWith('/api/accounts/')) {
+    const rest = pathname.slice('/api/accounts/'.length)
+    const [id, action] = rest.split('/')
+    if (!id) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Not found' }))
+      return
+    }
+    if (!getAccountView(id)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: `No such account: ${id}` }))
+      return
+    }
+
+    const fail = (status: number, err: unknown) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+    }
+
+    if (!action && method === 'PATCH') {
+      let body: Buffer
+      try {
+        body = await readBody(req)
+      } catch {
+        return fail(413, new Error('Payload too large'))
+      }
+      try {
+        const patch = sanitizeAccountPatch(JSON.parse(body.toString('utf-8')))
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(updateAccount(id, patch)))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (!action && method === 'DELETE') {
+      try {
+        deleteAccount(id)
+        log('info', `Account "${id}" deleted`)
+        res.writeHead(204)
+        res.end()
+      } catch (err) {
+        // still bound to clients
+        fail(409, err)
+      }
+      return
+    }
+
+    if (action === 'login' && method === 'POST') {
+      try {
+        const started = beginLogin(id)
+        log('info', `User "${session.u}" started an OAuth login for account "${id}"`)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify(started))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (action === 'complete' && method === 'POST') {
+      let body: Buffer
+      try {
+        body = await readBody(req)
+      } catch {
+        return fail(413, new Error('Payload too large'))
+      }
+      try {
+        const { code } = JSON.parse(body.toString('utf-8')) as { code?: string }
+        if (!code || !code.trim()) throw new Error('code is required')
+        const done = await completeLogin(id, code)
+        log('info', `User "${session.u}" completed an OAuth login for account "${id}"`)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, ...done, accounts: listAccounts() }))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (action === 'cancel' && method === 'POST') {
+      cancelLogin(id)
+      res.writeHead(204)
       res.end()
       return
     }
-    // TEMPORARY - Task 11 replaces /api/oauth with proper per-account routes.
-    const cancelAccounts = listAccounts()
-    if (cancelAccounts.length > 1) {
-      res.writeHead(409, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Multiple accounts configured - use the per-account routes (Task 11)' }))
-      return
-    }
-    const target = cancelAccounts[0]
-    if (target) cancelLogin(target.id)
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
+
+    res.writeHead(405, { Allow: 'PATCH, DELETE, POST' })
+    res.end()
     return
   }
 
