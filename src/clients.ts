@@ -1,24 +1,17 @@
-import { readFileSync, writeFileSync } from 'fs'
-import { resolve } from 'path'
 import { randomBytes } from 'crypto'
-import { parseDocument, YAMLSeq, YAMLMap } from 'yaml'
-import type { CostLimitPeriod } from './config.js'
+import {
+  listClientRows, getClientRow, insertClientRow, deleteClientRow,
+} from './accounts-store.js'
+import { getDb } from './db.js'
+import { reloadClients } from './auth.js'
 
 export interface ClientEntry {
   name: string
   token: string
-  cost_limit_usd?: number
-  cost_limit_period?: CostLimitPeriod
   home_dir?: string
 }
 
-export interface ClientLimitInput {
-  cost_limit_usd?: number | null
-  cost_limit_period?: CostLimitPeriod | null
-}
-
 const NAME_RE = /^[a-zA-Z0-9_.-]{1,64}$/
-const VALID_PERIODS: CostLimitPeriod[] = ['lifetime', 'monthly', 'daily']
 
 // A client's real home dir: POSIX absolute (/Users/alice, /home/alice, …) or a
 // Windows path (C:\Users\alice). Kept deliberately loose but anchored so a stray
@@ -33,169 +26,41 @@ export function normalizeHomeDir(raw: string): string | null {
   return null
 }
 
-function configPath(): string {
-  return resolve(
-    process.argv[2] ||
-    process.env.CCG_CONFIG_PATH ||
-    '/app/data/config.yaml',
-  )
+function toEntry(r: { name: string; token: string; homeDir: string }): ClientEntry {
+  return { name: r.name, token: r.token, home_dir: r.homeDir || undefined }
 }
 
-function loadDoc(path: string) {
-  const raw = readFileSync(path, 'utf-8')
-  return parseDocument(raw)
+export function listClients(): ClientEntry[] {
+  return listClientRows().map(toEntry)
 }
 
-function getTokensSeq(doc: ReturnType<typeof parseDocument>): YAMLSeq {
-  const auth = doc.getIn(['auth'], true) as YAMLMap | undefined
-  if (!auth) throw new Error('config: auth section missing')
-  let tokens = auth.get('tokens', true) as YAMLSeq | undefined
-  if (!tokens) {
-    tokens = new YAMLSeq()
-    auth.set('tokens', tokens)
+export function addClient(name: string): ClientEntry {
+  if (!NAME_RE.test(name)) {
+    throw new Error('client name must be 1-64 chars, [a-zA-Z0-9_.-]')
   }
-  return tokens
+  if (getClientRow(name)) throw new Error(`client "${name}" already exists`)
+  const row = insertClientRow({ name, token: randomBytes(32).toString('hex') })
+  reloadClients()
+  return toEntry(row)
 }
 
-function readEntry(item: YAMLMap): ClientEntry | null {
-  const name = item.get('name')
-  const token = item.get('token')
-  if (typeof name !== 'string' || typeof token !== 'string') return null
-  const limitRaw = item.get('cost_limit_usd')
-  const periodRaw = item.get('cost_limit_period')
-  const cost_limit_usd = typeof limitRaw === 'number' && limitRaw > 0 ? limitRaw : undefined
-  const cost_limit_period =
-    typeof periodRaw === 'string' && (VALID_PERIODS as string[]).includes(periodRaw)
-      ? (periodRaw as CostLimitPeriod)
-      : undefined
-  const homeRaw = item.get('home_dir')
-  const home_dir = typeof homeRaw === 'string' && homeRaw.trim() ? homeRaw.trim() : undefined
-  return { name, token, cost_limit_usd, cost_limit_period, home_dir }
+export function removeClient(name: string): boolean {
+  if (!getClientRow(name)) return false
+  deleteClientRow(name) // bindings cascade
+  reloadClients()
+  return true
 }
 
 /** Set or clear a client's real home dir. Pass null/'' to clear (→ auto-detect). */
 export function setClientHomeDir(name: string, homeDir: string | null): ClientEntry {
-  const path = configPath()
-  const doc = loadDoc(path)
-  const tokens = getTokensSeq(doc)
-  let target: YAMLMap | null = null
-  for (const item of tokens.items) {
-    if (item instanceof YAMLMap && item.get('name') === name) {
-      target = item
-      break
-    }
-  }
-  if (!target) throw new Error(`client "${name}" not found`)
+  if (!getClientRow(name)) throw new Error(`client "${name}" not found`)
   const normalized = homeDir == null || homeDir.trim() === '' ? null : normalizeHomeDir(homeDir)
   if (homeDir != null && homeDir.trim() !== '' && normalized === null) {
     throw new Error('home_dir must be an absolute path (e.g. /Users/alice, /home/alice, or C:\\Users\\alice)')
   }
-  if (normalized) target.set('home_dir', normalized)
-  else target.delete('home_dir')
-  writeFileSync(path, doc.toString(), 'utf-8')
-  const result = readEntry(target)
-  if (!result) throw new Error('failed to read updated entry')
-  return result
-}
-
-function applyLimitToYamlEntry(entry: YAMLMap, input: ClientLimitInput): void {
-  if (input.cost_limit_usd === null || input.cost_limit_usd === 0) {
-    entry.delete('cost_limit_usd')
-    entry.delete('cost_limit_period')
-    return
-  }
-  if (typeof input.cost_limit_usd === 'number' && input.cost_limit_usd > 0) {
-    entry.set('cost_limit_usd', input.cost_limit_usd)
-    const period =
-      typeof input.cost_limit_period === 'string' &&
-      (VALID_PERIODS as string[]).includes(input.cost_limit_period)
-        ? input.cost_limit_period
-        : 'lifetime'
-    entry.set('cost_limit_period', period)
-  } else if (input.cost_limit_period !== undefined && input.cost_limit_period !== null) {
-    // period without limit: ignore
-  }
-}
-
-export function listClients(): ClientEntry[] {
-  const doc = loadDoc(configPath())
-  const tokens = getTokensSeq(doc)
-  const out: ClientEntry[] = []
-  for (const item of tokens.items) {
-    if (item instanceof YAMLMap) {
-      const e = readEntry(item)
-      if (e) out.push(e)
-    }
-  }
-  return out
-}
-
-export function addClient(name: string, limit?: ClientLimitInput): ClientEntry {
-  if (!NAME_RE.test(name)) {
-    throw new Error('client name must be 1-64 chars, [a-zA-Z0-9_.-]')
-  }
-  const path = configPath()
-  const doc = loadDoc(path)
-  const tokens = getTokensSeq(doc)
-
-  for (const item of tokens.items) {
-    if (item instanceof YAMLMap && item.get('name') === name) {
-      throw new Error(`client "${name}" already exists`)
-    }
-  }
-
-  const token = randomBytes(32).toString('hex')
-  const entry = new YAMLMap()
-  entry.set('name', name)
-  entry.set('token', token)
-  if (limit) applyLimitToYamlEntry(entry, limit)
-  tokens.add(entry)
-
-  writeFileSync(path, doc.toString(), 'utf-8')
-  const result = readEntry(entry)
-  return result || { name, token }
-}
-
-export function setClientLimit(name: string, limit: ClientLimitInput): ClientEntry {
-  const path = configPath()
-  const doc = loadDoc(path)
-  const tokens = getTokensSeq(doc)
-  let target: YAMLMap | null = null
-  for (const item of tokens.items) {
-    if (item instanceof YAMLMap && item.get('name') === name) {
-      target = item
-      break
-    }
-  }
-  if (!target) throw new Error(`client "${name}" not found`)
-  applyLimitToYamlEntry(target, limit)
-  writeFileSync(path, doc.toString(), 'utf-8')
-  const result = readEntry(target)
-  if (!result) throw new Error('failed to read updated entry')
-  return result
-}
-
-export function removeClient(name: string): boolean {
-  const path = configPath()
-  const doc = loadDoc(path)
-  const tokens = getTokensSeq(doc)
-
-  let removedAt = -1
-  for (let i = 0; i < tokens.items.length; i++) {
-    const item = tokens.items[i]
-    if (item instanceof YAMLMap && item.get('name') === name) {
-      removedAt = i
-      break
-    }
-  }
-  if (removedAt === -1) return false
-
-  tokens.delete(removedAt)
-  if (tokens.items.length === 0) {
-    throw new Error('cannot remove the last client — at least one token must remain')
-  }
-  writeFileSync(path, doc.toString(), 'utf-8')
-  return true
+  getDb().prepare('UPDATE clients SET home_dir = ? WHERE name = ?').run(normalized || '', name)
+  reloadClients()
+  return toEntry(getClientRow(name)!)
 }
 
 export interface LauncherOptions {

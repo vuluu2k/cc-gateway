@@ -409,27 +409,9 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('headerSub').textContent = '@' + d.name;
     document.getElementById('avatar').textContent = (display[0] || '?').toUpperCase();
 
-    // Credit
-    const c = d.credit;
-    const big = document.getElementById('creditBig');
-    const sub = document.getElementById('creditSub');
-    const meterWrap = document.getElementById('creditMeterWrap');
-    const meter = document.getElementById('creditMeter');
-    const used = document.getElementById('creditUsed');
-    if (c.limit_usd == null) {
-      big.textContent = t('portal.credit.unlimited');
-      sub.textContent = t('portal.credit.noLimit');
-      meterWrap.style.display = 'none';
-      used.textContent = t('portal.credit.usedSoFar', { used: fmtCost(c.used_usd) });
-    } else {
-      meterWrap.style.display = '';
-      big.textContent = fmtCost(c.remaining_usd) + t('portal.credit.leftSuffix');
-      sub.textContent = t('portal.credit.ofCredit', { limit: fmtCost(c.limit_usd), period: periodLabel(c.period) });
-      const pct = c.limit_usd > 0 ? Math.min(100, (c.used_usd / c.limit_usd) * 100) : 0;
-      meter.style.width = pct + '%';
-      meter.className = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
-      used.textContent = t('portal.credit.usedOf', { used: fmtCost(c.used_usd), limit: fmtCost(c.limit_usd), pct: pct.toFixed(0) });
-    }
+    // The single client-wide credit card is hidden until it is redesigned around
+    // per-account limits; showing a stale single number would mislead.
+    document.getElementById('creditBig').closest('.card').style.display = 'none';
 
     // Lifetime stats
     const lt = d.lifetime;

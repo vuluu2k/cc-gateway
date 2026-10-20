@@ -6,7 +6,7 @@ import { URL } from 'url'
 import zlib from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, reloadClients } from './auth.js'
-import { listAccountRows, listClientRows, listBindings } from './accounts-store.js'
+import { listAccountRows, listClientRows, listBindings, replaceBindings, getAccountRow } from './accounts-store.js'
 import {
   listAccounts,
   getAccountView,
@@ -24,7 +24,7 @@ import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer,
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { captureRateLimitHeaders } from './ratelimit.js'
@@ -52,8 +52,8 @@ import {
   createInstallGrant,
   verifyInstallGrant,
 } from './session.js'
-import { addClient, listClients, removeClient, setClientLimit, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
-import type { CostLimitPeriod } from './config.js'
+import { addClient, listClients, removeClient, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
+import type { LimitPeriod } from './accounts-store.js'
 
 export function startProxy(config: Config) {
   reloadClients()
@@ -964,18 +964,12 @@ async function handleDashboardArea(
 
   if (pathname === '/api/clients') {
     if (method === 'GET') {
-      const clients = listClients().map((c) => {
-        const since = periodStart(c.cost_limit_period)
-        const used = c.cost_limit_usd ? getClientCostSince(c.name, since) : 0
-        return {
-          name: c.name,
-          token_preview: c.token.slice(0, 8) + '…' + c.token.slice(-4),
-          cost_limit_usd: c.cost_limit_usd ?? null,
-          cost_limit_period: c.cost_limit_period ?? null,
-          cost_used_usd: c.cost_limit_usd ? Number(used.toFixed(4)) : null,
-          home_dir: c.home_dir ?? null,
-        }
-      })
+      // Limits live on (client, account) bindings now; see /api/clients/:name/accounts.
+      const clients = listClients().map((c) => ({
+        name: c.name,
+        token_preview: c.token.slice(0, 8) + '…' + c.token.slice(-4),
+        home_dir: c.home_dir ?? null,
+      }))
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ clients }))
       return
@@ -995,8 +989,6 @@ async function handleDashboardArea(
         scheme?: string
         format?: string
         platform?: string
-        cost_limit_usd?: number | null
-        cost_limit_period?: CostLimitPeriod | null
       }
       try {
         payload = JSON.parse(body.toString('utf-8'))
@@ -1017,16 +1009,12 @@ async function handleDashboardArea(
       }
       let entry
       try {
-        entry = addClient(name, {
-          cost_limit_usd: payload.cost_limit_usd ?? undefined,
-          cost_limit_period: payload.cost_limit_period ?? undefined,
-        })
+        entry = addClient(name)
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadClients()
       // Generate a one-time portal password the admin hands to the client.
       let portalPassword = ''
       try {
@@ -1068,6 +1056,79 @@ async function handleDashboardArea(
 
   if (pathname.startsWith('/api/clients/')) {
     const rest = pathname.slice('/api/clients/'.length)
+
+    // GET/PUT /api/clients/:name/accounts — the client's account bindings
+    // (priority + per-account limit). PUT replaces the whole set.
+    if (rest.endsWith('/accounts')) {
+      const clientName = decodeURIComponent(rest.slice(0, -'/accounts'.length))
+      if (!listClients().some((c) => c.name === clientName)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `No such client: ${clientName}` }))
+        return
+      }
+
+      if (method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify({ bindings: listBindings(clientName) }))
+        return
+      }
+
+      if (method === 'PUT') {
+        let body: Buffer
+        try {
+          body = await readBody(req)
+        } catch {
+          res.writeHead(413, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Payload too large' }))
+          return
+        }
+        try {
+          const parsed = JSON.parse(body.toString('utf-8')) as {
+            bindings?: Array<{
+              account_id?: string; priority?: number
+              limit_usd?: number; limit_period?: string
+            }>
+          }
+          const rows = (parsed.bindings || []).map((b, index) => {
+            if (!b.account_id) throw new Error('account_id is required on every binding')
+            if (!getAccountRow(b.account_id)) {
+              throw new Error(`No such account: ${b.account_id}`)
+            }
+            const period = b.limit_period || 'lifetime'
+            if (!['lifetime', 'monthly', 'daily'].includes(period)) {
+              throw new Error(`Invalid limit_period: ${period}`)
+            }
+            const limit = Number(b.limit_usd ?? 0)
+            if (!Number.isFinite(limit) || limit < 0) {
+              throw new Error(`Invalid limit_usd: ${b.limit_usd}`)
+            }
+            const priority = Number(b.priority ?? index)
+            if (!Number.isFinite(priority)) throw new Error(`Invalid priority: ${b.priority}`)
+            return {
+              accountId: b.account_id,
+              priority,
+              limitUsd: limit,
+              limitPeriod: period as LimitPeriod,
+            }
+          })
+          if (new Set(rows.map((r) => r.accountId)).size !== rows.length) {
+            throw new Error('An account may appear at most once per client')
+          }
+          replaceBindings(clientName, rows)
+          log('info', `Client "${clientName}" bound to ${rows.length} account(s)`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ bindings: listBindings(clientName) }))
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+        }
+        return
+      }
+
+      res.writeHead(405, { Allow: 'GET, PUT' })
+      res.end()
+      return
+    }
 
     // GET /api/clients/:name/launcher — re-download launcher for an existing
     // client (reuses token from config.yaml — does not rotate it).
@@ -1154,7 +1215,6 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'not found' }))
         return
       }
-      reloadClients()
       removeClientPassword(name)
       removeClientProfile(name)
       log('info', `User "${session.u}" removed client "${name}"`)
@@ -1171,11 +1231,7 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Payload too large' }))
         return
       }
-      let payload: {
-        cost_limit_usd?: number | null
-        cost_limit_period?: CostLimitPeriod | null
-        home_dir?: string | null
-      }
+      let payload: { home_dir?: string | null }
       try {
         payload = JSON.parse(body.toString('utf-8'))
       } catch {
@@ -1183,18 +1239,10 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Invalid JSON' }))
         return
       }
-      // Cost-limit and workdir edits arrive as independent PATCHes; apply whatever
-      // keys are present so one call can't clobber the other.
       let updated
       try {
         if ('home_dir' in payload) {
           updated = setClientHomeDir(name, payload.home_dir ?? null)
-        }
-        if ('cost_limit_usd' in payload || 'cost_limit_period' in payload) {
-          updated = setClientLimit(name, {
-            cost_limit_usd: payload.cost_limit_usd ?? null,
-            cost_limit_period: payload.cost_limit_period ?? null,
-          })
         }
         if (!updated) {
           updated = listClients().find((c) => c.name === name)
@@ -1205,13 +1253,10 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadClients()
       log('info', `User "${session.u}" updated client "${name}"`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         name: updated.name,
-        cost_limit_usd: updated.cost_limit_usd ?? null,
-        cost_limit_period: updated.cost_limit_period ?? null,
         home_dir: updated.home_dir ?? null,
       }))
       return
@@ -1377,9 +1422,6 @@ async function handlePortalArea(
   // Usage + credit + profile JSON for this client only.
   if (pathname === '/portal/me') {
     const stats = getClientStats(client.name)
-    const limit = client.cost_limit_usd ?? null
-    const period = client.cost_limit_period ?? 'lifetime'
-    const used = getClientCostSince(client.name, periodStart(client.cost_limit_period))
     const profile = getClientProfile(client.name)
     const credMeta = getClientCredentialMeta(client.name)
     // Per-account quota, replacing the single client-wide limit the "Account"
@@ -1403,12 +1445,6 @@ async function handlePortalArea(
         password_updated_at: credMeta?.updated_at ?? null,
       },
       quotas,
-      credit: {
-        limit_usd: limit,
-        period,
-        used_usd: Number(used.toFixed(4)),
-        remaining_usd: limit != null ? Number(Math.max(0, limit - used).toFixed(4)) : null,
-      },
       lifetime: stats.lifetime,
       periods: stats.periods,
       models: getClientModels(client.name),
