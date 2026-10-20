@@ -2,8 +2,12 @@
 # (see deploy/vps/README.md). The runner only dials out to GitHub, so the private-IP
 # box needs no inbound SSH from Actions. Same shape as webcake_bot on the same VPS.
 #
-# SECURITY: the repo is public. Only push/workflow_dispatch trigger this — never add
-# `pull_request` (a fork PR would run arbitrary code on the VPS).
+# SECURITY: the repo is public. Leaving `pull_request` out of THIS file is not the
+# protection: a fork PR can add its own workflow with `runs-on: [self-hosted, cc-gateway]`
+# and GitHub runs the PR's workflow files. What stops that is the repo setting
+# Settings -> Actions -> General -> Fork pull request workflows ->
+# "Require approval for all external contributors", which MUST stay on
+# (see deploy/vps/README.md). Still never add `pull_request` here.
 
 name: Deploy VPS
 

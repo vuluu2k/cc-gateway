@@ -7,7 +7,7 @@ Client ──https──▶ nginx-01 (OpenResty, TLS, auto-ssl) ──http──
 | File | Dùng ở đâu |
 |------|-----------|
 | `docker-compose.yml` | webcake-ai: build từ `Dockerfile` gốc, bind `BIND_IP:8443`, dữ liệu ở `~/cc-gateway/data` |
-| `backup.sh` | webcake-ai: backup `ccg.db` (trước mỗi lần deploy + cron 03:00), giữ 14 bản |
+| `backup.sh` | webcake-ai: backup `ccg.db` (trước mỗi lần deploy + cron 03:00), mỗi lần một file theo timestamp, giữ 14 bản |
 | `nginx-ccg.conf` | nginx-01: `/usr/local/openresty/nginx/conf/sites/` |
 | `../../.github/workflows/deploy-vps.yml` | Tự deploy khi push `main` qua runner self-hosted trên webcake-ai |
 
@@ -17,13 +17,19 @@ Mọi trạng thái (`ccg.db`: account, token OAuth, client, binding, metrics; `
 nằm ở `~/cc-gateway/data` trên VPS. Workflow chỉ thay `src/`, `deploy/`, `tests/` — không bao giờ
 đụng `data/`, nên restart, rebuild, redeploy đều không mất dữ liệu.
 
+Backup tên `ccg-<UTC timestamp>.db`, nên deploy lần hai hay cron 03:00 không ghi đè bản trước deploy.
+Khi container không chạy hoặc đang restart liên tục (`exec` lỗi), `backup.sh` không chặn deploy sửa lỗi:
+nó copy thô `ccg.db` cùng `-wal`/`-shm` thành `ccg-<timestamp>-raw.db*`, và chỉ fail khi copy thô cũng lỗi.
+
 Khôi phục một bản backup:
 
 ```bash
 cd ~/cc-gateway/deploy/vps
 docker compose stop gateway
-sudo cp ../../data/backups/ccg-YYYY-MM-DD.db ../../data/ccg.db
 sudo rm -f ../../data/ccg.db-wal ../../data/ccg.db-shm
+sudo cp ../../data/backups/ccg-<timestamp>.db ../../data/ccg.db
+# Bản -raw: copy kèm file -wal/-shm nếu có
+# sudo cp ../../data/backups/ccg-<timestamp>-raw.db-wal ../../data/ccg.db-wal
 docker compose start gateway
 ```
 
@@ -38,7 +44,16 @@ docker compose start gateway
 4. **nginx-01**: copy `nginx-ccg.conf` thành `sites/ccg-toolvn.conf`, thay `SERVER_NAME`,
    `sudo openresty -t && sudo openresty -s reload`. DNS của domain trỏ về IP public của nginx-01.
 
-> ⚠️ Repo public: workflow cố ý **không** có trigger `pull_request`. Đừng thêm.
+5. **Bắt buộc, repo public**: *Settings → Actions → General → Fork pull request workflows* phải đặt
+   **"Require approval for all external contributors"** và giữ nguyên như vậy.
+
+> ⚠️ Runner self-hosted trên repo public: việc `deploy-vps.yml` không có trigger `pull_request` **không**
+> bảo vệ được gì. Một PR từ fork có thể tự thêm file workflow riêng với `runs-on: [self-hosted, cc-gateway]`,
+> và GitHub chạy workflow nằm trong chính PR đó trên runner này. User `cc` có quyền docker (tương đương
+> root), VPS giữ token OAuth của mọi account Claude và nằm trong mạng nội bộ 10.1.5.x. Thứ duy nhất chặn
+> việc đó là setting duyệt fork PR ở bước 5 — đừng bao giờ hạ nó xuống (mặc định của GitHub chỉ duyệt
+> người đóng góp lần đầu). Cách chắc hơn: chuyển repo sang private, hoặc chạy runner bằng user không có
+> quyền docker.
 
 ## Lần chạy đầu
 
