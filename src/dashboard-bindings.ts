@@ -108,6 +108,8 @@ export function bindingsScript(): string {
         accountIds = (a.accounts || []).map((x) => x.id);
         (b.bindings || []).forEach(addRow);
         saveBtn.disabled = false;
+        // Zero bindings never runs addRow, so re-show the empty state here.
+        syncEmpty();
       } catch (e) {
         rowsEl.innerHTML = '';
         document.getElementById('bindNone').style.display = 'none';

@@ -62,7 +62,18 @@ export function startProxy(config: Config) {
   const useTls = config.server.tls?.cert && config.server.tls?.key
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleRequest(req, res, config, upstream)
+    // One throw inside a request (a malformed %-escape, a DB read) must fail
+    // that request only. Uncaught, the rejection kills the process and every
+    // account's in-flight traffic with it.
+    handleRequest(req, res, config, upstream).catch((err) => {
+      log('error', `Request ${req.method} ${req.url} crashed: ${err instanceof Error ? err.stack || err.message : err}`)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Internal gateway error' }))
+      } else {
+        res.destroy()
+      }
+    })
   }
 
   let server
