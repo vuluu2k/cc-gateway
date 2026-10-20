@@ -31,7 +31,7 @@ import { captureRateLimitHeaders } from './ratelimit.js'
 import { renderDashboard, renderLogin } from './dashboard.js'
 import { renderPortal, renderPortalLogin } from './portal.js'
 import { renderLanding } from './landing.js'
-import { authenticateUser } from './users.js'
+import { authenticateUser, countUsers, createUser, checkSetupCode, clearSetupCode } from './users.js'
 import {
   generateAndSetClientPassword,
   verifyClientPassword,
@@ -106,22 +106,19 @@ async function handleRequest(
 
   // Health check - no auth required
   if (pathname === '/_health') {
-    // TEMPORARY - Task 7 replaces this with selectAccountFor(). It only keeps
-    // the gateway runnable between the two tasks.
     const accounts = listAccounts()
-    const firstUsable = accounts.find((a) => isUsable(a.id))
-    const oauthOk = !!firstUsable
-    const status = oauthOk ? 200 : 503
-    res.writeHead(status, { 'Content-Type': 'application/json' })
+    const usable = accounts.filter((a) => isUsable(a.id))
+    // Always 200 while the process is serving. The container's healthcheck reads
+    // this, and an unhealthy container is dropped from Traefik's pool - which
+    // would take the dashboard down exactly when an admin needs it to re-login.
+    // Degraded upstream state belongs in the body, not the status code.
+    res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
-      status: oauthOk ? 'ok' : 'degraded',
-      oauth: oauthOk ? 'valid' : 'expired/refreshing',
-      oauth_state: firstUsable?.state ?? accounts[0]?.state ?? 'uninitialized',
-      oauth_error: firstUsable?.lastError ?? accounts[0]?.lastError ?? null,
-      canonical_device: config.identity.device_id.slice(0, 8) + '...',
-      canonical_platform: config.env.platform,
+      status: usable.length > 0 ? 'ok' : 'degraded',
+      accounts_total: accounts.length,
+      accounts_usable: usable.length,
+      accounts_expired: accounts.filter((a) => a.state === 'expired').map((a) => a.id),
       upstream: config.upstream.url,
-      clients: listClientRows().map((c) => c.name),
     }))
     return
   }
@@ -753,7 +750,7 @@ async function handleDashboardArea(
         return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(renderLogin())
+      res.end(renderLogin(undefined, countUsers() === 0))
       return
     }
     if (method === 'POST') {
@@ -768,6 +765,34 @@ async function handleDashboardArea(
       const params = new URLSearchParams(body.toString('utf-8'))
       const username = (params.get('username') || '').trim()
       const password = params.get('password') || ''
+
+      // First-time setup: no users yet, so the POST creates the first admin,
+      // gated by the one-time code printed in the server log.
+      if (countUsers() === 0) {
+        const fail = (status: number, key: string) => {
+          res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' })
+          res.end(renderLogin(key, true))
+        }
+        if (!checkSetupCode((params.get('setup_code') || '').trim())) {
+          log('warn', `Bad setup code from ${req.socket.remoteAddress}`)
+          return fail(401, 'setup.badCode')
+        }
+        let created
+        try {
+          created = createUser(username, password)
+        } catch {
+          return fail(400, 'setup.badInput')
+        }
+        clearSetupCode()
+        log('info', `First admin "${created.username}" created via setup code`)
+        res.writeHead(302, {
+          Location: '/dashboard',
+          'Set-Cookie': setCookieHeader(createSessionCookie(created.username), secure),
+        })
+        res.end()
+        return
+      }
+
       if (!username || !password) {
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(renderLogin('err.adminCreds'))

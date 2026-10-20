@@ -2,7 +2,7 @@ import { i18nHead, langSwitcher } from './i18n.js'
 import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
 import { renderBindingsModal, bindingsScript } from './dashboard-bindings.js'
 
-export function renderLogin(error?: string): string {
+export function renderLogin(error?: string, setup = false): string {
   const errBlock = error
     ? `<div class="error" data-i18n="${error}"></div>`
     : ''
@@ -52,14 +52,16 @@ ${i18nHead()}
       <div class="brand">CC Gateway</div>
       ${langSwitcher('padding:6px 8px')}
     </div>
-    <h1 data-i18n="alogin.h1">CC Gateway · Admin</h1>
+    <h1 data-i18n="${setup ? 'setup.title' : 'alogin.h1'}">CC Gateway · Admin</h1>
     <p class="sub" data-i18n="alogin.sub">Sign in to access the dashboard</p>
     ${errBlock}
     <label for="username" data-i18n="alogin.username">Username</label>
     <input id="username" name="username" autocomplete="username" autofocus required />
     <label for="password" data-i18n="alogin.password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required />
-    <button type="submit" data-i18n="common.signin">Sign in</button>
+    <input id="password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required />
+    ${setup ? `<label for="setup_code" data-i18n="setup.code">Setup code</label>
+    <input id="setup_code" name="setup_code" autocomplete="off" required />` : ''}
+    <button type="submit" data-i18n="${setup ? 'setup.submit' : 'common.signin'}">${setup ? 'Create admin' : 'Sign in'}</button>
     <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#8b949e">
       <span data-i18n="alogin.clientPrompt">Are you a client?</span> <a href="/portal" style="color:#58a6ff" data-i18n="alogin.openPortal">Open the client portal</a>
     </p>

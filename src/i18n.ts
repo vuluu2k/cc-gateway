@@ -256,6 +256,21 @@ const M: Record<string, Entry> = {
   'portal.msg.loadErr': { en: 'Error loading data', vi: 'Lỗi tải dữ liệu', zh: '加载数据出错' },
 
   // ── admin login ──
+  // ── first-time setup ──
+  'setup.title': { en: 'First-time setup', vi: 'Cài đặt lần đầu', zh: '首次设置' },
+  'setup.code': {
+    en: 'Setup code (see server logs)',
+    vi: 'Mã cài đặt (xem log server)',
+    zh: '设置码（见服务器日志）',
+  },
+  'setup.submit': { en: 'Create admin', vi: 'Tạo admin', zh: '创建管理员' },
+  'setup.badCode': { en: 'Wrong setup code', vi: 'Mã cài đặt không đúng', zh: '设置码不正确' },
+  'setup.badInput': {
+    en: 'Username must be 3-32 chars; password at least 8',
+    vi: 'Tên đăng nhập 3-32 ký tự; mật khẩu tối thiểu 8',
+    zh: '用户名需 3-32 个字符；密码至少 8 位',
+  },
+
   'alogin.title': { en: 'CC Gateway — Login', vi: 'CC Gateway — Đăng nhập', zh: 'CC Gateway — 登录' },
   'alogin.h1': { en: 'CC Gateway · Admin', vi: 'CC Gateway · Quản trị', zh: 'CC Gateway · 管理后台' },
   'alogin.sub': { en: 'Sign in to access the dashboard', vi: 'Đăng nhập để vào bảng điều khiển', zh: '登录以访问仪表盘' },

@@ -6,10 +6,13 @@ import { initAccounts } from './accounts.js'
 import { startProxy } from './proxy.js'
 import { initDb } from './db.js'
 import { initMetrics } from './metrics.js'
-import { countUsers } from './users.js'
+import { currentSetupCode } from './users.js'
+import { migrateFromConfig } from './migrate-accounts.js'
+import { reloadClients } from './auth.js'
 import {
   bootstrapConfigIfMissing,
   syncOAuthFromCredentialsIfChanged,
+  seedAccountFromEnvIfEmpty,
 } from './bootstrap-config.js'
 import { syncClaudeCodeVersion, startDailyVersionAutoUpdate } from './cc-version.js'
 
@@ -48,14 +51,28 @@ try {
   initDb(dbPath)
   initMetrics()
   log('info', `SQLite database: ${resolve(dbPath)}`)
-  if (countUsers() === 0) {
-    log('warn', 'No dashboard users yet. Create one with: npm run add-user <username>')
-  }
 
+  // Two seeding paths, both guarded on "accounts table is empty", so at most
+  // one of them ever runs:
+  //   1. an existing single-account config.yaml is imported, or
+  //   2. a fresh server is seeded from env/credentials.
+  // Neither is required — an empty gateway boots fine and is set up from the web.
+  migrateFromConfig(config)
+  seedAccountFromEnvIfEmpty(config)
+
+  reloadClients()
   // Initialize every upstream account — each gets its own refresh timer. Never
   // throws: a dead refresh_token parks THAT account in `expired` and leaves
   // the others running, so the admin always has the dashboard to re-login.
   await initAccounts()
+
+  const setupCode = currentSetupCode()
+  if (setupCode) {
+    log('warn', '─────────────────────────────────────────────')
+    log('warn', `First-time setup code: ${setupCode}`)
+    log('warn', '  Open https://<your-domain>/admin and use it to create the admin account.')
+    log('warn', '─────────────────────────────────────────────')
+  }
 
   startProxy(config)
 

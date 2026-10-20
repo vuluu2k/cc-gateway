@@ -101,6 +101,25 @@ test('config không có oauth thì không migrate gì', () => {
   rmSync(dir2, { recursive: true, force: true })
 })
 
+test('config trung ten client thi bo qua ban sau, khong nem', () => {
+  const dir3 = mkdtempSync(join(tmpdir(), 'ccg-test-'))
+  initDb(join(dir3, 'dup.db'))
+  const dupConfig = {
+    oauth: { refresh_token: 'ref-dup' },
+    auth: {
+      tokens: [
+        { name: 'alice', token: 'tok-1' },
+        { name: 'alice', token: 'tok-2' },
+      ],
+    },
+    identity: { device_id: 'ef'.repeat(32), email: 'dup@example.com' },
+  } as unknown as Config
+  assert.doesNotThrow(() => migrateFromConfig(dupConfig))
+  assert.equal(listClientRows().length, 1)
+  assert.equal(listAccountRows().length, 1)
+  rmSync(dir3, { recursive: true, force: true })
+})
+
 rmSync(dir, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exit(1)

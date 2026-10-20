@@ -129,7 +129,23 @@ npm run generate-identity        # sinh identity rời
 
 ## 3. Deploy bằng Docker (production)
 
-### 3.1. Setup tự động
+### 3.0. Cài đặt chỉ bằng Docker (không cần credentials)
+
+```bash
+docker compose up -d
+docker compose logs gateway | grep "setup code"
+```
+
+1. Gateway khởi động với 0 account và in ra log một **mã cài đặt** dùng một lần (hạn 24h).
+2. Mở `https://<domain>/admin`, nhập username, mật khẩu và mã cài đặt để tạo admin đầu tiên.
+3. Trong dashboard, vào **Accounts -> Add account** rồi đăng nhập Claude ngay trên trình duyệt.
+4. Tạo client và gán client vào account.
+
+`CCG_REFRESH_TOKEN` (hoặc file credentials mount vào) giờ là **tuỳ chọn**: chỉ dùng để seed account đầu tiên trên server mới, bỏ qua bước đăng nhập trình duyệt. `/_health` luôn trả 200 khi tiến trình còn chạy; tình trạng account nằm trong body (`accounts_usable`, `accounts_expired`).
+
+**Nhiều account:** thêm bao nhiêu account Claude tuỳ ý. Mỗi client được gán vào một hoặc nhiều account kèm độ ưu tiên (số nhỏ = dùng trước) và hạn mức chi tiêu riêng từng account (`0` = không giới hạn; chu kỳ `lifetime`/`monthly`/`daily`). Hết hạn mức thì client tràn sang account kế tiếp; không có failover tự động khi gặp 401/429.
+
+### 3.1. Setup tự động (tuỳ chọn)
 
 Trên máy admin (đã login Claude Code):
 
@@ -166,7 +182,7 @@ docker compose restart        # nạp lại danh sách token
 - Tạo service mới trên Coolify, point tới repo này.
 - Set domain (Coolify tự sinh `SERVICE_FQDN_GATEWAY`).
 - Traefik sẽ tự cấp Let's Encrypt cert và redirect HTTP → HTTPS.
-- Mount `~/.claude/.credentials.json` ở host vào `/app/data/claude-credentials.json` (read-only) để container tự bootstrap config lần đầu.
+- Tuỳ chọn: mount `~/.claude/.credentials.json` ở host vào `/app/data/claude-credentials.json` (read-only) để seed account đầu tiên (mặc định đã comment trong `docker-compose.yml`).
 
 ### 3.4. Deploy thủ công với TLS tự ký
 
@@ -198,7 +214,7 @@ Khi container start lần đầu mà chưa có `config.yaml` ở `/app/data/conf
 - `CCG_REFRESH_TOKEN` env var (nếu set).
 - File `claude-credentials.json` mount vào (mặc định `/app/data/claude-credentials.json`, read-only).
 
-`docker-compose.yml` đã cấu hình mount sẵn `/root/.claude/.credentials.json` của host vào path này, nên trên server vừa cài Claude Code chỉ cần `docker compose up -d` là gateway tự bootstrap.
+Mount này đã được comment sẵn trong `docker-compose.yml`; bỏ comment nếu muốn seed account đầu tiên từ login của host. Nếu không có nguồn nào, gateway vẫn khởi động với 0 account.
 
 Ngoài ra:
 - **Token rotation persist**: mỗi lần OAuth refresh, refresh token mới được ghi đè vào `config.yaml` để restart không bị "replay" token đã tiêu thụ.

@@ -40,7 +40,16 @@ export function migrateFromConfig(config: Config): boolean {
       email: config.identity?.email || '',
     })
 
+    const seen = new Set<string>()
     for (const entry of tokens) {
+      // A hand-edited config.yaml can carry the same client twice. Skipping the
+      // duplicate keeps the gateway bootable; throwing here would crash-loop the
+      // container with the admin locked out of the dashboard.
+      if (!entry.name || seen.has(entry.name)) {
+        log('warn', `Migration: skipping duplicate or unnamed client "${entry.name}"`)
+        continue
+      }
+      seen.add(entry.name)
       insertClientRow({ name: entry.name, token: entry.token, homeDir: entry.home_dir })
       replaceBindings(entry.name, [
         {

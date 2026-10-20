@@ -159,7 +159,23 @@ ccg help                  Show help
 npm run dev    # tsx watch, auto-reload
 ```
 
-### Docker (production)
+### Docker (production, no credentials needed)
+
+```bash
+docker compose up -d
+docker compose logs gateway | grep "setup code"
+```
+
+1. The gateway boots with zero accounts and prints a one-time **setup code** (valid 24h, single use) in the log.
+2. Open `https://<your-domain>/admin`, enter a username, password and the setup code to create the first admin.
+3. In the dashboard, go to **Accounts -> Add account** and log in to Claude in the browser.
+4. Create clients and assign them to accounts.
+
+`CCG_REFRESH_TOKEN` (or a mounted `credentials.json`) is now **optional**: it only seeds a first account on a fresh server so you can skip the browser login. `/_health` always returns 200 while the process is up; account health is in the body (`accounts_usable`, `accounts_expired`).
+
+**Multiple accounts:** add as many Claude accounts as you like. Each client is bound to one or more accounts with a priority (lower number = tried first) and an optional per-account spend limit (`0` = unlimited, period `lifetime`/`monthly`/`daily`). When a limit is used up, the client overflows to its next account; there is no automatic failover on 401/429.
+
+Alternatively, the interactive script (extracts local credentials):
 
 ```bash
 bash scripts/admin-setup.sh

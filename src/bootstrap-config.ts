@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { randomBytes } from 'crypto'
+import type { Config } from './config.js'
+import { getDb } from './db.js'
+import { insertAccountRow } from './accounts-store.js'
 import { parseDocument, YAMLMap } from 'yaml'
 import { log } from './logger.js'
 
@@ -55,7 +58,7 @@ function gatherSeedCredentials(): ClaudeCredentials | null {
   return null
 }
 
-function buildConfigYaml(creds: ClaudeCredentials, opts: {
+function buildConfigYaml(creds: ClaudeCredentials | null, opts: {
   clientName: string
   clientToken: string
   deviceId: string
@@ -68,12 +71,12 @@ function buildConfigYaml(creds: ClaudeCredentials, opts: {
 
 upstream:
   url: https://api.anthropic.com
-
+${creds?.refreshToken ? `
 oauth:
   access_token: "${creds.accessToken || ''}"
   refresh_token: "${creds.refreshToken}"
   expires_at: ${creds.expiresAt || 0}
-
+` : ''}
 auth:
   tokens:
     - name: ${clientName}
@@ -134,11 +137,12 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
   log('info', `No config found at ${absPath} — attempting auto-bootstrap`)
 
   const creds = gatherSeedCredentials()
-  if (!creds || !creds.refreshToken) {
-    log('error', 'Cannot bootstrap config: no OAuth credentials available.')
-    log('error', '  Set CCG_REFRESH_TOKEN env var, or mount a credentials.json at')
-    log('error', '  CCG_CREDENTIALS_PATH (or /app/data/claude-credentials.json).')
-    return false
+  // No credentials is no longer fatal. The gateway boots empty and the admin
+  // adds the first account from the dashboard — that is the whole point of the
+  // docker-only setup path.
+  if (!creds) {
+    log('info', 'No seed credentials found — starting with an empty account list.')
+    log('info', '  Add the first account from the admin dashboard once it is up.')
   }
 
   const dbPath = resolve(dirname(absPath), 'ccg.db')
@@ -277,4 +281,31 @@ export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
     refreshToken: creds.refreshToken,
     expiresAt: credsExpiresAt,
   })
+}
+
+/**
+ * Create the first account from CCG_REFRESH_TOKEN or a mounted credentials.json.
+ *
+ * Optional convenience: it saves a browser login on a fresh server. Skipped
+ * entirely when accounts already exist, including right after the config.yaml
+ * migration has run.
+ */
+export function seedAccountFromEnvIfEmpty(config: Config): boolean {
+  const existing = getDb().prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number }
+  if (existing.n > 0) return false
+
+  const creds = gatherSeedCredentials()
+  if (!creds?.refreshToken) return false
+
+  insertAccountRow({
+    id: 'default',
+    label: 'Seeded',
+    refreshToken: creds.refreshToken,
+    accessToken: creds.accessToken || '',
+    expiresAt: creds.expiresAt || 0,
+    deviceId: config.identity?.device_id,
+    email: config.identity?.email || '',
+  })
+  log('info', 'Seeded account "default" from environment credentials')
+  return true
 }
