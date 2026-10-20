@@ -38,6 +38,9 @@ type Runtime = {
   refreshTimer: NodeJS.Timeout | null
   failureCount: number
   refreshTokenExpiresAt: number | null
+  // Bumped by a re-login and by disable; a refresh that was already mid-HTTP
+  // when it changed drops its result instead of clobbering the new tokens.
+  generation: number
 }
 
 // One runtime slot per account. Timers live here, not in the DB, so a crashed
@@ -49,7 +52,7 @@ let missingTokenLoggedAt = new Map<string, number>()
 function runtimeOf(id: string): Runtime {
   let rt = runtimes.get(id)
   if (!rt) {
-    rt = { refreshTimer: null, failureCount: 0, refreshTokenExpiresAt: null }
+    rt = { refreshTimer: null, failureCount: 0, refreshTokenExpiresAt: null, generation: 0 }
     runtimes.set(id, rt)
   }
   return rt
@@ -159,14 +162,27 @@ async function runRefresh(id: string): Promise<void> {
     return
   }
 
+  const rt = runtimeOf(id)
+  const generation = rt.generation
+  // Deleted (runtime slot replaced) or re-logged-in/disabled while we waited.
+  const stale = () => runtimes.get(id) !== rt || rt.generation !== generation
+
   try {
     log('info', `Refreshing OAuth token for account "${id}"...`)
     const tokens = await refreshOAuthToken(row.refreshToken)
+    if (stale()) {
+      log('info', `Account "${id}": dropping a refresh result that predates a re-login`)
+      return
+    }
     persist(id, tokens)
     runtimeOf(id).failureCount = 0
     log('info', `Account "${id}" refreshed, expires at ${new Date(tokens.expiresAt).toISOString()}`)
     scheduleRefresh(id, tokens.expiresAt)
   } catch (err) {
+    if (stale()) {
+      log('info', `Account "${id}": dropping a refresh failure that predates a re-login`)
+      return
+    }
     handleRefreshFailure(id, err)
   }
 }
@@ -272,7 +288,10 @@ export function updateAccount(
 ): AccountView {
   const wasEnabled = getAccountRow(id)?.enabled
   const row = updateAccountRow(id, patch)
-  if (patch.enabled === false) clearTimerFor(id)
+  if (patch.enabled === false) {
+    clearTimerFor(id)
+    runtimeOf(id).generation++
+  }
   if (patch.enabled === true && !wasEnabled) {
     // Re-run the same startup decision initAccounts made: schedule a refresh
     // if the cached token is still good, refresh now if not, or park
@@ -295,6 +314,8 @@ export function deleteAccount(id: string): void {
     throw new Error(`Account "${id}" is still used by: ${names}`)
   }
   clearTimerFor(id)
+  // Dropping the slot is the generation bump for delete: an in-flight
+  // refresh compares against its own slot and sees it replaced.
   runtimes.delete(id)
   pendingLogins.delete(id)
   deleteAccountRow(id)
@@ -351,7 +372,9 @@ export async function completeLogin(
 
   const tokens = await completeOAuthLogin(pasted, pending)
   pendingLogins.delete(id)
-  runtimeOf(id).failureCount = 0
+  const rt = runtimeOf(id)
+  rt.generation++
+  rt.failureCount = 0
   persist(id, tokens)
   scheduleRefresh(id, tokens.expiresAt)
   log('info', `Account "${id}" logged in, token expires at ${new Date(tokens.expiresAt).toISOString()}`)

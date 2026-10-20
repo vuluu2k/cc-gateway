@@ -7,9 +7,12 @@ import { updateAccountRow } from '../src/accounts-store.js'
 import {
   initAccounts, listAccounts, getAccountView, createAccount, updateAccount,
   deleteAccount, getAccessTokenFor, isUsable, beginLogin, cancelLogin,
-  _resetAccountsRuntime,
+  _resetAccountsRuntime, completeLogin,
 } from '../src/accounts.js'
-import { insertClientRow, replaceBindings } from '../src/accounts-store.js'
+import { insertClientRow, replaceBindings, getAccountRow } from '../src/accounts-store.js'
+import https from 'https'
+import { EventEmitter } from 'events'
+import { syncBuiltinESMExports } from 'module'
 
 let passed = 0
 let failed = 0
@@ -151,6 +154,60 @@ await test('deleteAccount chạy khi không còn binding', () => {
   deleteAccount('pro-2')
   assert.equal(getAccountView('pro-2'), null)
   assert.equal(listAccounts().length, 1)
+})
+
+await test('refresh cu ket thuc sau khi re-login thi bi bo qua', async () => {
+  // Stub the OAuth token endpoint: a refresh request hangs until released, a
+  // login (authorization_code) answers at once with fresh tokens.
+  const realRequest = https.request
+  let releaseRefresh: (status: number, body: object) => void = () => {}
+  const reply = (cb: (res: EventEmitter & { statusCode?: number }) => void, status: number, body: object) => {
+    const res = Object.assign(new EventEmitter(), { statusCode: status })
+    cb(res)
+    res.emit('data', Buffer.from(JSON.stringify(body)))
+    res.emit('end')
+  }
+  ;(https as { request: unknown }).request = (_opts: unknown, cb: (res: EventEmitter) => void) => {
+    const req = Object.assign(new EventEmitter(), {
+      setTimeout: () => req,
+      destroy: () => {},
+      payload: '',
+      write: (chunk: string) => { req.payload += chunk },
+      end: () => {
+        if (JSON.parse(req.payload).grant_type === 'refresh_token') {
+          releaseRefresh = (status, body) => reply(cb, status, body)
+        } else {
+          reply(cb, 200, { access_token: 'login-access', refresh_token: 'login-refresh', expires_in: 3600 })
+        }
+      },
+    })
+    return req
+  }
+  syncBuiltinESMExports()
+  try {
+    createAccount({ id: 'race' })
+    updateAccountRow('race', { refreshToken: 'old-refresh', expiresAt: 0 })
+    const init = initAccounts() // starts the refresh for "race"; it now hangs
+    await new Promise((r) => setImmediate(r))
+
+    beginLogin('race')
+    await completeLogin('race', 'the-code')
+    assert.equal(getAccountRow('race')!.accessToken, 'login-access')
+
+    // The stale refresh now fails permanently: it must not park the freshly
+    // logged-in account in `expired`, nor touch its tokens.
+    releaseRefresh(400, { error: 'invalid_grant' })
+    await init
+    const row = getAccountRow('race')!
+    assert.equal(row.state, 'ok')
+    assert.equal(row.accessToken, 'login-access')
+    assert.equal(row.refreshToken, 'login-refresh')
+  } finally {
+    ;(https as { request: unknown }).request = realRequest
+    syncBuiltinESMExports()
+    _resetAccountsRuntime()
+    deleteAccount('race')
+  }
 })
 
 // Re-enabling an account now re-arms its refresh timer (see the "bật lại
