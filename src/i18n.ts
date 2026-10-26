@@ -191,6 +191,7 @@ const M: Record<string, Entry> = {
   'th.calls': { en: 'Calls', vi: 'Lượt', zh: '调用' },
   'th.input': { en: 'Input', vi: 'Vào', zh: '输入' },
   'th.output': { en: 'Output', vi: 'Ra', zh: '输出' },
+  'th.errors': { en: 'Errors', vi: 'Lỗi', zh: '错误' },
   'th.cost': { en: 'Cost', vi: 'Chi phí', zh: '费用' },
   'th.model': { en: 'Model', vi: 'Model', zh: '模型' },
   'th.cache': { en: 'Cache', vi: 'Cache', zh: '缓存' },
@@ -320,20 +321,30 @@ const M: Record<string, Entry> = {
   'admin.quota.resetting': { en: 'resetting…', vi: 'đang đặt lại…', zh: '正在重置…' },
   'admin.quota.rep': { en: 'authoritative', vi: 'đang áp dụng', zh: '当前生效' },
   'admin.quota.rawSummary': { en: 'Raw rate-limit headers', vi: 'Header rate-limit gốc', zh: '原始限流响应头' },
+  'admin.sec.charts': { en: 'Requests over time (per client)', vi: 'Yêu cầu theo thời gian (theo khách hàng)', zh: '随时间的请求数（按客户端）' },
   'admin.sec.models': { en: 'By model', vi: 'Theo model', zh: '按模型' },
   'admin.sec.clients': { en: 'Clients', vi: 'Khách hàng', zh: '客户端' },
   'admin.sec.recent': { en: 'Recent requests', vi: 'Yêu cầu gần đây', zh: '近期请求' },
   'admin.sec.install': { en: 'Install guide', vi: 'Hướng dẫn cài đặt', zh: '安装指南' },
   'admin.addClient': { en: '+ Add client', vi: '+ Thêm khách hàng', zh: '+ 添加客户端' },
   // stat tiles
-  'admin.stat.totalRequests': { en: 'Total requests', vi: 'Tổng yêu cầu', zh: '总请求数' },
-  'admin.stat.totalCost': { en: 'Total cost', vi: 'Tổng chi phí', zh: '总费用' },
-  'admin.stat.input': { en: 'Input tokens', vi: 'Token đầu vào', zh: '输入令牌' },
-  'admin.stat.output': { en: 'Output tokens', vi: 'Token đầu ra', zh: '输出令牌' },
+  // overview KPI tiles (rolling 24h unless noted)
+  'admin.kpi.vsPrev': { en: 'vs prev 24h', vi: 'so với 24h trước', zh: '较前 24 小时' },
+  'admin.kpi.cost24h': { en: 'Cost · 24h', vi: 'Chi phí · 24h', zh: '费用 · 24 小时' },
+  'admin.kpi.projected': { en: 'Projected · 30 days', vi: 'Dự kiến · 30 ngày', zh: '预计 · 30 天' },
+  'admin.kpi.projectedSub': { en: '7-day pace: {cost} / 7d', vi: 'nhịp 7 ngày: {cost} / 7 ngày', zh: '7 天速度：{cost} / 7 天' },
+  'admin.kpi.requests24h': { en: 'Requests · 24h', vi: 'Yêu cầu · 24h', zh: '请求 · 24 小时' },
+  'admin.kpi.activeClients': { en: 'Active clients · 24h', vi: 'Khách hoạt động · 24h', zh: '活跃客户端 · 24 小时' },
+  'admin.kpi.activeClientsSub': { en: 'of clients seen in 30 days', vi: 'trên số khách trong 30 ngày', zh: '占 30 天内出现的客户端' },
+  'admin.kpi.errorRate': { en: 'Error rate · 24h', vi: 'Tỉ lệ lỗi · 24h', zh: '错误率 · 24 小时' },
+  'admin.kpi.errorSub': { en: 'upstream {up} · gateway {gw}', vi: 'upstream {up} · gateway {gw}', zh: '上游 {up} · 网关 {gw}' },
+  'admin.kpi.cacheHit': { en: 'Cache hit · 24h', vi: 'Tỉ lệ cache · 24h', zh: '缓存命中 · 24 小时' },
+  'admin.kpi.cacheHitSub': { en: '{tokens} tokens from cache', vi: '{tokens} token từ cache', zh: '{tokens} 令牌来自缓存' },
+  'admin.kpi.quota': { en: 'Tightest 5h quota', vi: 'Hạn mức 5h sát nhất', zh: '最紧的 5 小时额度' },
+  'admin.kpi.quotaNone': { en: 'no quota headers yet', vi: 'chưa có header hạn mức', zh: '尚无额度响应头' },
+  'admin.kpi.topSpender': { en: 'Top spender · 24h', vi: 'Tốn nhiều nhất · 24h', zh: '花费最多 · 24 小时' },
   'admin.stat.cacheRead': { en: 'Cache read', vi: 'Đọc cache', zh: '缓存读取' },
   'admin.stat.cacheWrite': { en: 'Cache write', vi: 'Ghi cache', zh: '缓存写入' },
-  'admin.stat.activeClients': { en: 'Active clients', vi: 'Khách hàng hoạt động', zh: '活跃客户端' },
-  'admin.stat.errors': { en: 'Errors', vi: 'Lỗi', zh: '错误' },
   'admin.stat.uptime': { en: 'Uptime', vi: 'Thời gian chạy', zh: '运行时间' },
   // periods / table extras
   'admin.period.allTime': { en: 'All time', vi: 'Toàn bộ', zh: '全部时间' },
@@ -526,7 +537,7 @@ const M: Record<string, Entry> = {
   'admin.modal.pwReset.note': { en: 'New portal password — copy it now, it won\'t be shown again. The client can change it after logging in.', vi: 'Mật khẩu cổng mới — sao chép ngay, sẽ không hiển thị lại. Khách hàng có thể đổi sau khi đăng nhập.', zh: '新的门户密码 — 请立即复制，之后不再显示。客户端登录后可自行修改。' },
   // about / how-to-use
   'admin.about.summary': { en: 'How to use this dashboard', vi: 'Cách dùng bảng điều khiển này', zh: '如何使用此仪表盘' },
-  'admin.about.statsRow': { en: '<strong>Stats row</strong> — totals across the gateway\'s full history (persisted in SQLite): requests, accumulated cost (USD list price), tokens, active clients, errors, uptime.', vi: '<strong>Hàng thống kê</strong> — tổng trên toàn bộ lịch sử của gateway (lưu trong SQLite): yêu cầu, chi phí tích luỹ (giá niêm yết USD), token, khách hàng hoạt động, lỗi, thời gian chạy.', zh: '<strong>统计行</strong> — 网关全部历史的总计（持久化在 SQLite 中）：请求数、累计费用（USD 标价）、令牌、活跃客户端、错误、运行时间。' },
+  'admin.about.statsRow': { en: '<strong>Stats row</strong> — last 24h vs the 24h before: cost, 30-day projection at the 7-day pace, requests, active clients, error rate (upstream vs gateway), prompt-cache hit rate, the upstream account closest to its 5h limit, and the top-spending client. Full-history totals are in <em>Cost &amp; periods</em>.', vi: '<strong>Hàng thống kê</strong> — 24h qua so với 24h trước đó: chi phí, dự kiến 30 ngày theo nhịp 7 ngày, số yêu cầu, khách hoạt động, tỉ lệ lỗi (upstream / gateway), tỉ lệ dùng cache prompt, tài khoản upstream sát hạn mức 5h nhất và khách tốn nhiều nhất. Tổng toàn bộ lịch sử nằm ở <em>Chi phí &amp; kỳ</em>.', zh: '<strong>统计行</strong> — 最近 24 小时与之前 24 小时对比：费用、按 7 天速度预计的 30 天费用、请求数、活跃客户端、错误率（上游 / 网关）、提示缓存命中率、最接近 5 小时上限的上游账户，以及花费最多的客户端。完整历史总计见 <em>费用与周期</em>。' },
   'admin.about.periods': { en: '<strong>Cost &amp; usage by period</strong> — same totals split by Today / Last 7d / Last 30d / All time so you can track spend trend.', vi: '<strong>Chi phí &amp; mức dùng theo kỳ</strong> — cùng tổng đó chia theo Hôm nay / 7 ngày / 30 ngày / Toàn bộ để theo dõi xu hướng chi tiêu.', zh: '<strong>按周期的费用与用量</strong> — 相同的总计按 今天 / 最近 7 天 / 最近 30 天 / 全部时间 拆分，便于跟踪花费趋势。' },
   'admin.about.charts': { en: '<strong>Requests over time</strong> — per-client traffic. Toggle <em>Last 60 min</em> / <em>Last 24 h</em>.', vi: '<strong>Yêu cầu theo thời gian</strong> — lưu lượng theo khách hàng. Chuyển <em>60 phút qua</em> / <em>24 giờ qua</em>.', zh: '<strong>随时间的请求数</strong> — 按客户端的流量。切换 <em>最近 60 分钟</em> / <em>最近 24 小时</em>。' },
   'admin.about.models': { en: '<strong>By model</strong> — per-model totals: calls, input/output/cache tokens, and cost. Cost uses Anthropic public list prices.', vi: '<strong>Theo model</strong> — tổng theo model: lượt gọi, token vào/ra/cache, và chi phí. Chi phí dùng giá niêm yết công khai của Anthropic.', zh: '<strong>按模型</strong> — 各模型的总计：调用次数、输入/输出/缓存令牌和费用。费用采用 Anthropic 公开标价。' },
@@ -569,7 +580,7 @@ export function i18nHead(): string {
   };
   window.applyI18n = function(root){
     root = root || document;
-    root.querySelectorAll('[data-i18n]').forEach(function(el){ el.textContent = window.t(el.getAttribute('data-i18n')); });
+    root.querySelectorAll('[data-i18n]').forEach(function(el){ var k = el.getAttribute('data-i18n'), s = window.t(k); if (s !== k) el.textContent = s; });
     root.querySelectorAll('[data-i18n-html]').forEach(function(el){ el.innerHTML = window.t(el.getAttribute('data-i18n-html')); });
     root.querySelectorAll('[data-i18n-ph]').forEach(function(el){ el.setAttribute('placeholder', window.t(el.getAttribute('data-i18n-ph'))); });
     root.querySelectorAll('[data-i18n-title]').forEach(function(el){ el.setAttribute('title', window.t(el.getAttribute('data-i18n-title'))); });

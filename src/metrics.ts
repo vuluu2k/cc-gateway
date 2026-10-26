@@ -578,7 +578,8 @@ export function getMetricsSnapshot() {
       SUM(output_tokens) as output_tokens,
       SUM(cache_read_tokens) as cache_read_tokens,
       SUM(cache_creation_tokens) as cache_creation_tokens,
-      SUM(cost_usd) as cost_usd
+      SUM(cost_usd) as cost_usd,
+      SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors
     FROM request_metrics WHERE ts >= ?`,
   )
   const periodSummary = periods.map((p) => {
@@ -587,6 +588,7 @@ export function getMetricsSnapshot() {
       key: p.key,
       label: p.label,
       total: r.total || 0,
+      errors: r.errors || 0,
       inputTokens: r.input_tokens || 0,
       outputTokens: r.output_tokens || 0,
       cacheReadTokens: r.cache_read_tokens || 0,
@@ -594,6 +596,46 @@ export function getMetricsSnapshot() {
       costUsd: r.cost_usd || 0,
     }
   })
+
+  // Overview KPIs: last 24h vs the 24h before it, so tiles can show a trend.
+  const kpiStmt = db.prepare(
+    `SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
+      SUM(CASE WHEN status >= 400 AND error_source = 'upstream' THEN 1 ELSE 0 END) as upstream_errors,
+      SUM(CASE WHEN status >= 400 AND error_source = 'gateway' THEN 1 ELSE 0 END) as gateway_errors,
+      COUNT(DISTINCT client) as active_clients,
+      SUM(input_tokens) as input_tokens,
+      SUM(cache_read_tokens) as cache_read_tokens,
+      SUM(cache_creation_tokens) as cache_creation_tokens,
+      SUM(cost_usd) as cost_usd
+    FROM request_metrics WHERE ts >= ? AND ts < ?`,
+  )
+  const kpiWindow = (from: number, to: number) => {
+    const r = kpiStmt.get(from, to) as any
+    return {
+      total: r.total || 0,
+      errors: r.errors || 0,
+      upstreamErrors: r.upstream_errors || 0,
+      gatewayErrors: r.gateway_errors || 0,
+      activeClients: r.active_clients || 0,
+      inputTokens: r.input_tokens || 0,
+      cacheReadTokens: r.cache_read_tokens || 0,
+      cacheCreationTokens: r.cache_creation_tokens || 0,
+      costUsd: r.cost_usd || 0,
+    }
+  }
+  const topSpender = db
+    .prepare(
+      `SELECT client, SUM(cost_usd) as cost_usd FROM request_metrics
+       WHERE ts >= ? GROUP BY client HAVING cost_usd > 0 ORDER BY cost_usd DESC LIMIT 1`,
+    )
+    .get(now - day) as { client: string; cost_usd: number } | undefined
+  const kpis = {
+    last24h: kpiWindow(now - day, now + 1),
+    prev24h: kpiWindow(now - 2 * day, now - day),
+    topSpender: topSpender ? { client: topSpender.client, costUsd: topSpender.cost_usd } : null,
+  }
 
   // Claude subscription quota (5h + weekly) per upstream account, from each
   // account's latest response headers, plus the models exercised within the
@@ -612,6 +654,7 @@ export function getMetricsSnapshot() {
     uptimeMs: now - startedAt,
     totals,
     periods: periodSummary,
+    kpis,
     clients,
     models,
     minuteSeries,

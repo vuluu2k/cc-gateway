@@ -17,7 +17,7 @@
     "update-version:dev": "tsx src/scripts/update-version.ts",
     "set-workdir": "node dist/scripts/set-workdir.js",
     "set-workdir:dev": "tsx src/scripts/set-workdir.ts",
-    "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts && tsx tests/ratelimit.test.ts && tsx tests/pricing.test.ts && tsx tests/accounts-store.test.ts && tsx tests/migration.test.ts && tsx tests/oauth-client.test.ts && tsx tests/accounts.test.ts && tsx tests/routing.test.ts && tsx tests/effective-config.test.ts && tsx tests/clients.test.ts && tsx tests/setup.test.ts && tsx tests/proxy-account.test.ts"
+    "test": "tsx tests/rewriter.test.ts && tsx tests/preview.test.ts && tsx tests/ratelimit.test.ts && tsx tests/pricing.test.ts && tsx tests/accounts-store.test.ts && tsx tests/migration.test.ts && tsx tests/oauth-client.test.ts && tsx tests/accounts.test.ts && tsx tests/routing.test.ts && tsx tests/effective-config.test.ts && tsx tests/clients.test.ts && tsx tests/setup.test.ts && tsx tests/proxy-account.test.ts && tsx tests/metrics.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

@@ -337,7 +337,12 @@ ${i18nHead()}
     text-transform: uppercase; color: var(--muted); font-weight: 600;
   }
   .stat .value { font-size: 26px; font-weight: 600; font-family: var(--mono); }
-  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 4px; letter-spacing: .03em; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; letter-spacing: .03em; }
+  .stat .sub { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 900px) { #topStats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stat.warn .value { color: var(--warn); }
+  .stat.err .value { color: var(--err); }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -904,25 +909,67 @@ ${renderBindingsModal()}
     return { ok, warn, err };
   };
 
+  // "▲ 12% vs prev 24h" — empty when there is nothing to compare against.
+  const fmtDelta = (cur, prev) => {
+    if (!prev) return '';
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    return (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct) + '% ' + t('admin.kpi.vsPrev');
+  };
+
   const renderTopStats = (data) => {
-    const tot = data.totals;
-    const errRate = tot.total ? ((tot.errors / tot.total) * 100).toFixed(1) : '0.0';
-    const html = [
-      [t('admin.stat.totalRequests'), fmtNum(tot.total)],
-      [t('admin.stat.totalCost'), fmtCost(tot.costUsd)],
-      [t('admin.stat.input'), fmtTokens(tot.inputTokens)],
-      [t('admin.stat.output'), fmtTokens(tot.outputTokens)],
-      [t('admin.stat.cacheRead'), fmtTokens(tot.cacheReadTokens)],
-      [t('admin.stat.cacheWrite'), fmtTokens(tot.cacheCreationTokens)],
-      [t('admin.stat.activeClients'), fmtNum(data.clients.length)],
-      [t('admin.stat.errors'), fmtNum(tot.errors) + ' (' + errRate + '%)'],
-      [t('admin.stat.uptime'), fmtUptime(data.uptimeMs)],
-    ].map(([label, value]) => \`
-      <div class="card stat">
-        <div class="value">\${value}</div>
-        <div class="label">\${label}</div>
+    const k = data.kpis || {};
+    const cur = k.last24h || {};
+    const prev = k.prev24h || {};
+    const p7 = (data.periods || []).find(p => p.key === '7d') || { costUsd: 0 };
+
+    const errPct = cur.total ? (cur.errors / cur.total) * 100 : 0;
+    const prompt = (cur.inputTokens || 0) + (cur.cacheReadTokens || 0) + (cur.cacheCreationTokens || 0);
+    const hitPct = prompt ? Math.round((cur.cacheReadTokens / prompt) * 100) : null;
+
+    // Tightest upstream account = highest 5h usage; that's the one about to block clients.
+    let tight = null;
+    for (const a of data.accounts || []) {
+      const q = (data.quotas || {})[a.id];
+      const w5 = q && (q.windows || []).find(w => w.key === '5h' && w.usedPct != null);
+      if (w5 && (!tight || w5.usedPct > tight.w5.usedPct)) {
+        tight = { id: a.id, w5, w7: (q.windows || []).find(w => w.key === '7d' && w.usedPct != null) };
+      }
+    }
+    const left5 = tight ? Math.max(0, 100 - Math.round(tight.w5.usedPct)) : null;
+
+    const top = k.topSpender;
+    const tiles = [
+      { label: t('admin.kpi.cost24h'), value: fmtCost(cur.costUsd || 0), sub: fmtDelta(cur.costUsd, prev.costUsd) },
+      { label: t('admin.kpi.projected'), value: fmtCost((p7.costUsd / 7) * 30), sub: t('admin.kpi.projectedSub', { cost: fmtCost(p7.costUsd) }) },
+      { label: t('admin.kpi.requests24h'), value: fmtNum(cur.total || 0), sub: fmtDelta(cur.total, prev.total) },
+      { label: t('admin.kpi.activeClients'), value: fmtNum(cur.activeClients || 0) + ' / ' + fmtNum(data.clients.length), sub: t('admin.kpi.activeClientsSub') },
+      {
+        label: t('admin.kpi.errorRate'), value: errPct.toFixed(1) + '%',
+        cls: errPct >= 5 ? 'err' : errPct >= 1 ? 'warn' : '',
+        sub: t('admin.kpi.errorSub', { up: fmtNum(cur.upstreamErrors || 0), gw: fmtNum(cur.gatewayErrors || 0) }),
+      },
+      {
+        label: t('admin.kpi.cacheHit'), value: hitPct == null ? '—' : hitPct + '%',
+        sub: t('admin.kpi.cacheHitSub', { tokens: fmtTokens(cur.cacheReadTokens || 0) }),
+      },
+      {
+        label: t('admin.kpi.quota'), value: left5 == null ? '—' : t('admin.quota.leftLabel', { pct: left5 }),
+        cls: left5 == null ? '' : left5 <= 10 ? 'err' : left5 <= 25 ? 'warn' : '',
+        sub: tight
+          ? esc(tight.id) + (tight.w7 ? ' · 7d ' + t('admin.quota.leftLabel', { pct: Math.max(0, 100 - Math.round(tight.w7.usedPct)) }) : '')
+          : t('admin.kpi.quotaNone'),
+      },
+      {
+        label: t('admin.kpi.topSpender'), value: top ? esc(top.client) : '—',
+        sub: top ? fmtCost(top.costUsd) + ' · ' + Math.round((top.costUsd / (cur.costUsd || 1)) * 100) + '%' : '',
+      },
+    ];
+    document.getElementById('topStats').innerHTML = tiles.map(s => \`
+      <div class="card stat \${s.cls || ''}">
+        <div class="label">\${s.label}</div>
+        <div class="value">\${s.value}</div>
+        <div class="sub">\${s.sub || '&nbsp;'}</div>
       </div>\`).join('');
-    document.getElementById('topStats').innerHTML = html;
   };
 
   const renderPeriods = (data) => {
@@ -930,6 +977,7 @@ ${renderBindingsModal()}
     const periods = (data.periods || []).concat([{
       key: 'all', label: t('admin.period.allTime'),
       total: tot.total,
+      errors: tot.errors,
       inputTokens: tot.inputTokens,
       outputTokens: tot.outputTokens,
       cacheReadTokens: tot.cacheReadTokens,
@@ -942,6 +990,7 @@ ${renderBindingsModal()}
       <td class="num" data-label="\${esc(t('th.input'))}" title="\${fmtNum(p.inputTokens)} tokens">\${fmtTokens(p.inputTokens)}</td>
       <td class="num" data-label="\${esc(t('th.output'))}" title="\${fmtNum(p.outputTokens)} tokens">\${fmtTokens(p.outputTokens)}</td>
       <td class="num" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(p.cacheReadTokens)} · cache write \${fmtNum(p.cacheCreationTokens)}">\${fmtTokens((p.cacheReadTokens || 0) + (p.cacheCreationTokens || 0))}</td>
+      <td class="num" data-label="\${esc(t('th.errors'))}">\${fmtNum(p.errors || 0)}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(p.costUsd)}</strong></td>
     </tr>\`).join('');
     document.getElementById('periodTable').innerHTML = \`
@@ -952,6 +1001,7 @@ ${renderBindingsModal()}
           <th class="num">\${esc(t('th.input'))}</th>
           <th class="num">\${esc(t('th.output'))}</th>
           <th class="num">\${esc(t('th.cache'))}</th>
+          <th class="num">\${esc(t('th.errors'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
         <tbody>\${rows}</tbody>
@@ -1109,7 +1159,8 @@ ${renderBindingsModal()}
   const renderCharts = (data) => {
     const series = range() === 'hour' ? data.hourSeries : data.minuteSeries;
     const unit = range() === 'hour' ? 'h' : 'm';
-    const clients = Object.keys(series);
+    const sum = (c) => series[c].reduce((s, p) => s + p.count, 0);
+    const clients = Object.keys(series).filter(c => sum(c) > 0).sort((a, b) => sum(b) - sum(a));
     if (!clients.length) {
       document.getElementById('charts').innerHTML = '<div class="empty">' + esc(t('admin.empty.noTraffic')) + '</div>';
       return;
@@ -1117,7 +1168,7 @@ ${renderBindingsModal()}
     const max = Math.max(1, ...clients.flatMap(c => series[c].map(b => b.count)));
     document.getElementById('charts').innerHTML = clients.map(c => {
       const points = series[c];
-      const total = points.reduce((s, p) => s + p.count, 0);
+      const total = sum(c);
       const bars = points.map(p => {
         const h = Math.round((p.count / max) * 100);
         return \`<div class="bar" style="height:\${Math.max(1, h)}%" title="\${new Date(p.ts).toLocaleString()} — \${p.count} req"></div>\`;
@@ -1466,7 +1517,7 @@ ${renderBindingsModal()}
       renderModels(currentData);
       renderClients(currentData);
       renderRecent(currentData);
-      document.getElementById('updated').textContent = t('admin.toolbar.updated', { time: new Date().toLocaleTimeString() });
+      document.getElementById('updated').textContent = t('admin.toolbar.updated', { time: new Date().toLocaleTimeString() }) + ' · ' + t('admin.stat.uptime') + ' ' + fmtUptime(currentData.uptimeMs);
     } catch (e) {
       document.getElementById('updated').textContent = t('admin.toolbar.fetchErr');
     }
