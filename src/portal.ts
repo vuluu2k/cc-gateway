@@ -4,6 +4,7 @@
 // their launcher. Everything is scoped to the one authenticated client.
 
 import { i18nHead, langSwitcher, icon } from './i18n.js'
+import { glassCss } from './glass.js'
 
 const SHARED_HEAD_STYLE = `
   :root {
@@ -62,6 +63,8 @@ ${SHARED_HEAD_STYLE}
   input:focus { outline: none; border-color: var(--accent); }
   button[type=submit] { margin-top: 22px; width: 100%; padding: 10px; font-size: 14px; font-weight: 500; }
   .back { display: block; text-align: center; margin-top: 16px; font-size: 12px; color: var(--muted); }
+  ${glassCss('.box')}
+  .box { border-radius: 14px; }
 </style>
 </head>
 <body>
@@ -177,6 +180,9 @@ ${SHARED_HEAD_STYLE}
     nav.tabs { top: 60px; }
     main { padding: 16px 14px; }
   }
+  ${glassCss('header, nav.tabs, .card')}
+  .card { border-radius: 14px; }
+  nav.tabs { box-shadow: none; }
 </style>
 </head>
 <body>

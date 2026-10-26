@@ -1,6 +1,7 @@
 import { i18nHead, langSwitcher } from './i18n.js'
 import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
 import { renderBindingsModal, bindingsScript } from './dashboard-bindings.js'
+import { glassCss } from './glass.js'
 
 export function renderLogin(error?: string, setup = false): string {
   const errBlock = error
@@ -24,7 +25,7 @@ ${i18nHead()}
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .box {
-    background: #14181d; border: 1px solid #232a33; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
     padding: 32px; width: 360px; max-width: 90vw;
   }
   h1 { font-size: 18px; margin: 0 0 6px; }
@@ -44,6 +45,7 @@ ${i18nHead()}
   }
   button:hover { background: #388bfd; }
   .error { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); color: #f85149; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+  ${glassCss('.box')}
 </style>
 </head>
 <body>
@@ -61,7 +63,7 @@ ${i18nHead()}
     <input id="password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required />
     ${setup ? `<label for="setup_code" data-i18n="setup.code">Setup code</label>
     <input id="setup_code" name="setup_code" autocomplete="off" required />` : ''}
-    <button type="submit" data-i18n="${setup ? 'setup.submit' : 'common.signin'}">${setup ? 'Create admin' : 'Sign in'}</button>
+    <button type="submit" class="primary" data-i18n="${setup ? 'setup.submit' : 'common.signin'}">${setup ? 'Create admin' : 'Sign in'}</button>
     <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#8b949e">
       <span data-i18n="alogin.clientPrompt">Are you a client?</span> <a href="/portal" style="color:#58a6ff" data-i18n="alogin.openPortal">Open the client portal</a>
     </p>
@@ -81,10 +83,9 @@ ${i18nHead()}
 <style>
   :root {
     --bg: #0b0d10;
-    --panel: rgba(22, 27, 34, .55);
-    --panel-2: rgba(255, 255, 255, .05);
-    --border: rgba(255, 255, 255, .08);
-    --glass-blur: blur(18px) saturate(140%);
+    --panel: #14181d;
+    --panel-2: #1b2027;
+    --border: #232a33;
     --fg: #e6edf3;
     --muted: #8b949e;
     --accent: #58a6ff;
@@ -467,31 +468,15 @@ ${i18nHead()}
   }
   .filter-bar .count.active { color: var(--accent); }
 
-  /* Glass theme: translucent panels blurred over a soft gradient backdrop.
-     Modals live outside the cards, so backdrop-filter (which re-anchors
-     position:fixed descendants) is safe on .card. */
-  :root { color-scheme: dark; }
-  body {
-    background:
-      radial-gradient(900px 600px at 0% -10%, rgba(88,166,255,.16), transparent 60%),
-      radial-gradient(800px 600px at 100% 0%, rgba(163,113,247,.14), transparent 60%),
-      radial-gradient(800px 500px at 50% 110%, rgba(63,185,80,.08), transparent 60%),
-      var(--bg);
-    background-attachment: fixed;
-  }
-  .card, aside.sidebar, header, .modal-box {
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-  }
-  .card { border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 32px rgba(0,0,0,.25); }
+  /* Glass theme (shared). Modals live outside the cards, so blur on .card is safe. */
+  ${glassCss('.card, aside.sidebar, header, .modal-box')}
+  .card { border-radius: 14px; }
   .modal { background: rgba(0,0,0,.45); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
   .modal-box { background: rgba(22,27,34,.8); border-radius: 16px; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 24px 64px rgba(0,0,0,.5); }
   .quota-win { border-radius: 12px; }
   .scroll-y thead th { background: rgba(22,27,34,.92); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
   select, button { border-radius: 8px; transition: background .15s, border-color .15s, filter .15s; }
   button:hover { background: rgba(255,255,255,.08); }
-  button.primary { background: linear-gradient(135deg, #1f6feb, #8957e5); border-color: transparent; box-shadow: 0 4px 14px rgba(31,111,235,.3); }
-  button.primary:hover { background: linear-gradient(135deg, #1f6feb, #8957e5); border-color: transparent; filter: brightness(1.12); }
   .pill { border: 1px solid rgba(255,255,255,.06); }
   tbody tr { transition: background .15s; }
   tbody tr:hover { background: rgba(255,255,255,.03); }
