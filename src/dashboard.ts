@@ -1515,10 +1515,15 @@ ${renderBindingsModal()}
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
         <td data-label="\${esc(t('th.accounts'))}">\${(c.bindings || []).length
-          ? c.bindings.map(b => '<span class="pill ok" title="' + esc(t('bind.priority')) + ' ' + esc(b.priority) + '">'
-              + esc(b.accountId)
-              + (b.limitUsd > 0 ? ' · $' + esc(b.limitUsd) + ' ' + esc(t('bind.period' + b.limitPeriod.charAt(0).toUpperCase() + b.limitPeriod.slice(1))) : '')
-              + '</span>').join(' ')
+          ? c.bindings.map(b => {
+              const pct = b.limitUsd > 0 ? Math.round((b.usedUsd / b.limitUsd) * 100) : 0;
+              const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : 'ok';
+              return '<span class="pill ' + cls + '" title="' + esc(t('bind.priority')) + ' ' + esc(b.priority) + '">'
+                + esc(b.accountId) + ' · ' + fmtCost(b.usedUsd)
+                + (b.limitUsd > 0 ? ' / ' + fmtCost(b.limitUsd) + ' (' + pct + '%) '
+                  + esc(t('bind.period' + b.limitPeriod.charAt(0).toUpperCase() + b.limitPeriod.slice(1))) : '')
+                + '</span>';
+            }).join(' ')
           : '<span class="pill err">' + esc(t('bind.none')) + '</span>'}</td>
         <td data-label="" style="text-align:right;white-space:nowrap">
           <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>

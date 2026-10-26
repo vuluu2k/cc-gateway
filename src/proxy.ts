@@ -1016,7 +1016,10 @@ async function handleDashboardArea(
         name: c.name,
         token_preview: c.token.slice(0, 8) + '…' + c.token.slice(-4),
         home_dir: c.home_dir ?? null,
-        bindings: listBindings(c.name),
+        bindings: listBindings(c.name).map((b) => ({
+          ...b,
+          usedUsd: getClientAccountCostSince(c.name, b.accountId, periodStart(b.limitPeriod)),
+        })),
       }))
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ clients }))
