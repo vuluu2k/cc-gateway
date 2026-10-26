@@ -81,9 +81,10 @@ ${i18nHead()}
 <style>
   :root {
     --bg: #0b0d10;
-    --panel: #14181d;
-    --panel-2: #1b2027;
-    --border: #232a33;
+    --panel: rgba(22, 27, 34, .55);
+    --panel-2: rgba(255, 255, 255, .05);
+    --border: rgba(255, 255, 255, .08);
+    --glass-blur: blur(18px) saturate(140%);
     --fg: #e6edf3;
     --muted: #8b949e;
     --accent: #58a6ff;
@@ -276,11 +277,11 @@ ${i18nHead()}
 
     /* Action buttons in clientsConfig: wrap and size for touch */
     #clientsConfig td[data-label=""]:last-child {
-      display: flex; flex-wrap: wrap; gap: 8px;
       padding-top: 8px; margin-top: 6px;
       border-top: 1px solid var(--border);
     }
-    #clientsConfig td button { padding: 8px 12px; font-size: 13px; flex: 1 1 0; min-width: 0; }
+    #clientsConfig td div.actions { flex-wrap: wrap; gap: 8px; }
+    #clientsConfig td button { padding: 8px 12px; font-size: 13px; flex: 1 1 auto; }
 
     /* Recent message/path get full row width — no more truncation needed */
     .msg, .path { max-width: none; white-space: normal; word-break: break-word; }
@@ -465,6 +466,49 @@ ${i18nHead()}
     font-family: var(--mono); white-space: nowrap;
   }
   .filter-bar .count.active { color: var(--accent); }
+
+  /* Glass theme: translucent panels blurred over a soft gradient backdrop.
+     Modals live outside the cards, so backdrop-filter (which re-anchors
+     position:fixed descendants) is safe on .card. */
+  :root { color-scheme: dark; }
+  body {
+    background:
+      radial-gradient(900px 600px at 0% -10%, rgba(88,166,255,.16), transparent 60%),
+      radial-gradient(800px 600px at 100% 0%, rgba(163,113,247,.14), transparent 60%),
+      radial-gradient(800px 500px at 50% 110%, rgba(63,185,80,.08), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+  .card, aside.sidebar, header, .modal-box {
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+  }
+  .card { border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 32px rgba(0,0,0,.25); }
+  .modal { background: rgba(0,0,0,.45); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+  .modal-box { background: rgba(22,27,34,.8); border-radius: 16px; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 24px 64px rgba(0,0,0,.5); }
+  .quota-win { border-radius: 12px; }
+  .scroll-y thead th { background: rgba(22,27,34,.92); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+  select, button { border-radius: 8px; transition: background .15s, border-color .15s, filter .15s; }
+  button:hover { background: rgba(255,255,255,.08); }
+  button.primary { background: linear-gradient(135deg, #1f6feb, #8957e5); border-color: transparent; box-shadow: 0 4px 14px rgba(31,111,235,.3); }
+  button.primary:hover { background: linear-gradient(135deg, #1f6feb, #8957e5); border-color: transparent; filter: brightness(1.12); }
+  .pill { border: 1px solid rgba(255,255,255,.06); }
+  tbody tr { transition: background .15s; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+
+  /* Clients table: keep tokens, account pills and actions on one line each. */
+  .grid > * { min-width: 0; } /* let wide tables scroll inside their card instead of widening the page */
+  #clientsConfig td { vertical-align: middle; }
+  #clientsConfig code.config-info { white-space: nowrap; padding: 4px 8px; }
+  #clientsConfig .acct-list { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  #clientsConfig .pill { border-radius: 8px; }
+  #clientsConfig .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  #clientsConfig .actions button { white-space: nowrap; }
+  /* The 520px table min-width above is declared after the phone media query,
+     so re-zero it here or the stacked cards overflow their container. */
+  @media (max-width: 600px) {
+    #periodTable table, #modelsTable table, #clientsTable table, #clientsConfig table { min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -1514,7 +1558,7 @@ ${renderBindingsModal()}
         <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
-        <td data-label="\${esc(t('th.accounts'))}">\${(c.bindings || []).length
+        <td data-label="\${esc(t('th.accounts'))}"><div class="acct-list">\${(c.bindings || []).length
           ? c.bindings.map(b => {
               const pct = b.limitUsd > 0 ? Math.round((b.usedUsd / b.limitUsd) * 100) : 0;
               const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : 'ok';
@@ -1523,15 +1567,15 @@ ${renderBindingsModal()}
                 + (b.limitUsd > 0 ? ' / ' + fmtCost(b.limitUsd) + ' (' + pct + '%) '
                   + esc(t('bind.period' + b.limitPeriod.charAt(0).toUpperCase() + b.limitPeriod.slice(1))) : '')
                 + '</span>';
-            }).join(' ')
-          : '<span class="pill err">' + esc(t('bind.none')) + '</span>'}</td>
-        <td data-label="" style="text-align:right;white-space:nowrap">
+            }).join('')
+          : '<span class="pill err">' + esc(t('bind.none')) + '</span>'}</div></td>
+        <td data-label=""><div class="actions">
           <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>
-          <button data-bind-client="\${esc(c.name)}">\${esc(t('bind.title'))}</button>
+          <button data-bind-client="\${esc(c.name)}" title="\${esc(t('bind.title'))}">\${esc(t('th.accounts'))}</button>
           <button data-regen="\${esc(c.name)}">\${esc(t('admin.client.redownload'))}</button>
           <button data-reset-pw="\${esc(c.name)}">\${esc(t('admin.client.resetPw'))}</button>
           <button class="danger" data-del-client="\${esc(c.name)}">\${esc(t('admin.client.delete'))}</button>
-        </td>
+        </div></td>
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
