@@ -345,6 +345,7 @@ const M: Record<string, Entry> = {
   'th.configuredClient': { en: 'Configured client', vi: 'Khách hàng đã cấu hình', zh: '已配置客户端' },
   'th.token': { en: 'Token', vi: 'Token', zh: '令牌' },
   'th.workdir': { en: 'Workdir', vi: 'Thư mục', zh: '工作目录' },
+  'th.accounts': { en: 'Accounts', vi: 'Tài khoản', zh: '账户' },
   // tooltips
   'admin.tip.inputTokens': { en: 'Input tokens', vi: 'Token đầu vào', zh: '输入令牌' },
   'admin.tip.outputTokens': { en: 'Output tokens', vi: 'Token đầu ra', zh: '输出令牌' },

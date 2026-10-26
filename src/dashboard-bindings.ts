@@ -176,6 +176,7 @@ export function bindingsScript(): string {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { showError(data.error || String(res.status)); return; }
         close();
+        loadClients();
       } catch (e) { showError(e.message); }
       finally { btn.disabled = false; }
     });

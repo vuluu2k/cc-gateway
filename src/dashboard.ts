@@ -1514,6 +1514,12 @@ ${renderBindingsModal()}
         <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
+        <td data-label="\${esc(t('th.accounts'))}">\${(c.bindings || []).length
+          ? c.bindings.map(b => '<span class="pill ok" title="' + esc(t('bind.priority')) + ' ' + esc(b.priority) + '">'
+              + esc(b.accountId)
+              + (b.limitUsd > 0 ? ' · $' + esc(b.limitUsd) + ' ' + esc(t('bind.period' + b.limitPeriod.charAt(0).toUpperCase() + b.limitPeriod.slice(1))) : '')
+              + '</span>').join(' ')
+          : '<span class="pill err">' + esc(t('bind.none')) + '</span>'}</td>
         <td data-label="" style="text-align:right;white-space:nowrap">
           <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>
           <button data-bind-client="\${esc(c.name)}">\${esc(t('bind.title'))}</button>
@@ -1524,7 +1530,7 @@ ${renderBindingsModal()}
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
-        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.workdir'))}</th><th></th></tr></thead>
+        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.workdir'))}</th><th>\${esc(t('th.accounts'))}</th><th></th></tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
     el.querySelectorAll('[data-edit-workdir]').forEach(btn => {
