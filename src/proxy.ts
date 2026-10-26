@@ -1475,14 +1475,21 @@ async function handlePortalArea(
     const stats = getClientStats(client.name)
     const profile = getClientProfile(client.name)
     const credMeta = getClientCredentialMeta(client.name)
-    // Per-account quota, replacing the single client-wide limit the "Account"
-    // card used to show — routing now spends against the client's bound
-    // accounts, each with its own limit/period.
-    const quotas = listBindings(client.name).map((b) => ({
-      account: b.accountId,
-      period: b.limitPeriod,
-      limit_usd: b.limitUsd,
-      used_usd: Number(getClientAccountCostSince(client.name, b.accountId, periodStart(b.limitPeriod)).toFixed(4)),
+    // Client-wide credit, summed per limit period. Account ids are never sent:
+    // a client sees its total, not which upstream account it spends on. Any
+    // unlimited binding makes its period unlimited (limit_usd 0).
+    const byPeriod = new Map<string, { period: string; used_usd: number; limit_usd: number; unlimited: boolean }>()
+    for (const b of listBindings(client.name)) {
+      const c = byPeriod.get(b.limitPeriod) ?? { period: b.limitPeriod, used_usd: 0, limit_usd: 0, unlimited: false }
+      c.used_usd += getClientAccountCostSince(client.name, b.accountId, periodStart(b.limitPeriod))
+      if (b.limitUsd > 0) c.limit_usd += b.limitUsd
+      else c.unlimited = true
+      byPeriod.set(b.limitPeriod, c)
+    }
+    const credit = [...byPeriod.values()].map((c) => ({
+      period: c.period,
+      used_usd: Number(c.used_usd.toFixed(4)),
+      limit_usd: c.unlimited ? 0 : c.limit_usd,
     }))
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({
@@ -1495,7 +1502,7 @@ async function handlePortalArea(
         created_at: credMeta?.created_at ?? null,
         password_updated_at: credMeta?.updated_at ?? null,
       },
-      quotas,
+      credit,
       lifetime: stats.lifetime,
       periods: stats.periods,
       models: getClientModels(client.name),

@@ -137,6 +137,7 @@ ${SHARED_HEAD_STYLE}
   .meter > span { display: block; height: 100%; background: var(--ok); width: 0; transition: width .3s; }
   .meter > span.warn { background: var(--warn); }
   .meter > span.err { background: var(--err); }
+  .credit-big { font-size: 32px; font-weight: 700; font-family: var(--mono); }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -213,8 +214,8 @@ ${SHARED_HEAD_STYLE}
     <div class="grid">
       <div id="loadErr" class="error" style="display:none"></div>
       <div class="card">
-        <h3 data-i18n="portal.quotaPerAccount">Quota per account</h3>
-        <div class="table-wrap" id="quotaTable"></div>
+        <h3 data-i18n="portal.credit.h">Your credit</h3>
+        <div id="creditBody"></div>
       </div>
       <div class="row" id="lifetimeStats"></div>
     </div>
@@ -424,15 +425,23 @@ ${SHARED_HEAD_STYLE}
 
     // Account
     const a = d.account || {};
-    const quotas = d.quotas || [];
+    const credit = d.credit || [];
     document.getElementById('acName').textContent = d.name;
-    // One row per bound account; there is deliberately no single client-wide limit.
-    document.getElementById('quotaTable').innerHTML = quotas.length
-      ? '<table><thead><tr><th>' + esc(t('admin.acctColumn')) + '</th><th class="num">' + esc(t('portal.used')) + '</th><th class="num">' + esc(t('bind.limit')) + '</th><th>' + esc(t('bind.period')) + '</th></tr></thead><tbody>'
-        + quotas.map((q) => '<tr><td>' + esc(q.account) + '</td><td class="num">' + fmtCost(q.used_usd) + '</td><td class="num">'
-          + (q.limit_usd > 0 ? fmtCost(q.limit_usd) : esc(t('portal.credit.unlimited')))
-          + '</td><td>' + esc(periodLabel(q.period)) + '</td></tr>').join('')
-        + '</tbody></table>'
+    // Totals per limit period only; which upstream account is used stays hidden.
+    document.getElementById('creditBody').innerHTML = credit.length
+      ? credit.map((c) => {
+          if (!(c.limit_usd > 0)) {
+            return '<div class="credit-big">' + esc(t('portal.credit.unlimited')) + '</div>'
+              + '<div class="muted">' + esc(t('portal.used')) + ' ' + fmtCost(c.used_usd) + ' · ' + esc(periodLabel(c.period)) + '</div>';
+          }
+          const pct = Math.min(100, Math.round((c.used_usd / c.limit_usd) * 100));
+          const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
+          return '<div class="credit-big">' + fmtCost(Math.max(0, c.limit_usd - c.used_usd))
+            + ' <span class="muted" style="font-size:14px">' + esc(t('portal.credit.left')) + '</span></div>'
+            + '<div class="meter"><span class="' + cls + '" style="width:' + pct + '%"></span></div>'
+            + '<div class="muted" style="font-size:12px">' + esc(t('portal.used')) + ' ' + fmtCost(c.used_usd)
+            + ' / ' + fmtCost(c.limit_usd) + ' (' + pct + '%) · ' + esc(periodLabel(c.period)) + '</div>';
+        }).join('<div style="height:14px"></div>')
       : '<span class="muted">' + esc(t('portal.account.noQuota')) + '</span>';
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
