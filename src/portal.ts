@@ -669,7 +669,9 @@ ${SHARED_HEAD_STYLE}
       el.style.display = 'block';
     });
   load();
-  setInterval(load, 30000);
+  // Skip polls while the tab is hidden; catch up as soon as it is shown again.
+  setInterval(() => { if (!document.hidden) load(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 })();
 </script>
 </body>

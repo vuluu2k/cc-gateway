@@ -1973,7 +1973,9 @@ ${renderBindingsModal()}
 
   loadClients();
   refresh();
-  setInterval(refresh, 5000);
+  // Skip polls while the tab is hidden; catch up as soon as it is shown again.
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   setInterval(tickAgoCells, 15000);
   setInterval(tickQuotaResets, 1000);
 })();

@@ -258,8 +258,8 @@ export function accountsScript(): string {
     });
 
     load();
-    // Keep states fresh, but never re-render under the admin's cursor.
-    setInterval(() => { if (!rowsEl.contains(document.activeElement)) load(); }, 10000);
+    // Keep states fresh, but never re-render under the admin's cursor or in a hidden tab.
+    setInterval(() => { if (!document.hidden && !rowsEl.contains(document.activeElement)) load(); }, 10000);
   }
 `
 }
