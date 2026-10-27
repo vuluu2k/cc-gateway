@@ -13,8 +13,7 @@ name: Deploy VPS
 
 on:
   push:
-    # feat/multi-account-gateway: deployed before merge; drop it once merged to main.
-    branches: [main, feat/multi-account-gateway]
+    branches: [main]
   workflow_dispatch:
 
 # One deploy at a time; a newer push waits instead of racing the running one.
