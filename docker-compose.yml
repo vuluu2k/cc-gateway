@@ -9,12 +9,14 @@ services:
     expose:
       - "8443"
     volumes:
-      # ccg_data persists both the SQLite DB and the auto-generated config.yaml
-      # (so device_id + tokens survive restarts/redeploys).
+      # ccg_data persists the SQLite DB (accounts, clients, bindings, metrics)
+      # and the generated config.yaml.
       - ccg_data:/app/data
-      # Host's claude login credentials — read on first start to bootstrap
-      # config.yaml automatically. Read-only so the container cannot tamper.
-      - /root/.claude/.credentials.json:/app/data/claude-credentials.json:ro
+      # OPTIONAL: seed the first account from a host login instead of doing the
+      # browser login. Leave this commented out for a pure docker setup — the
+      # gateway boots with zero accounts and you add the first one from the
+      # dashboard.
+      # - /root/.claude/.credentials.json:/app/data/claude-credentials.json:ro
     restart: unless-stopped
     networks:
       - coolify

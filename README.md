@@ -1,368 +1,180 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset=".github/logo-light.svg">
-    <img alt="CC Gateway" src=".github/logo-light.svg" width="440">
-  </picture>
+# CC Gateway
 
-  <p>Take back control of your AI API telemetry</p>
-</div>
+English | [Tiếng Việt](README.vi.md)
 
-<div align="center">
+A gateway between Claude Code and the Anthropic API that lets a team share **several Claude accounts** from one place:
 
-[![License: MIT][license-shield]][license-url]
-[![Version][version-shield]][version-url]
-[![Tests][tests-shield]][tests-url]
-[![Follow @whiletrue0x][twitter-shield]][twitter-url]
+- Many Claude accounts on one server, each with its own identity (`device_id`, email, environment fingerprint) and, optionally, its own outbound proxy.
+- Each client (person) gets its own token and is assigned one or more accounts in priority order, with a cost limit per client–account pair. When one account's limit is used up, the client moves on to the next.
+- Web dashboard: add accounts and **re-login them right in the browser**, create clients, assign accounts, watch cost per client/account and each account's 5-hour / weekly quota.
+- All state lives in SQLite under `data/`; restarts and redeploys never lose it.
+- Users install one launcher and use Claude Code as usual.
 
-</div>
+Visual walkthrough (route map, live account-selection simulator, account lifecycle): download [`docs/how-it-works.html`](docs/how-it-works.html) and open it in a browser (Vietnamese). Detailed operations guide: [`README.vi.md`](README.vi.md). VPS deploy with GitHub Actions: [`deploy/vps/README.md`](deploy/vps/README.md).
 
-<div align="center">
-  <a href="#quick-start">Quick Start</a> &middot;
-  <a href="#add-clients">Add Clients</a> &middot;
-  <a href="#what-gets-rewritten">What Gets Rewritten</a> &middot;
-  <a href="#deployment">Deployment</a> &middot;
-  <a href="#changelog">Changelog</a>
-</div>
+## How it works
 
----
+Clients keep running Claude Code as before. The gateway sits in the middle: it picks a Claude account that is still usable, rewrites the request to that account's identity, and forwards it with that account's OAuth token.
 
-> **Alpha** — This project is under active development. Test with a non-primary account first.
-
-> **Disclaimer** — See [full disclaimer](#disclaimer) below.
-
-## Why
-
-Claude Code collects **640+ telemetry event types** across 3 parallel channels, fingerprints your machine with **40+ environment dimensions**, and phones home every 5 seconds. Your device ID, email, OS version, installed runtimes, shell type, CPU architecture, and physical RAM are all reported to the vendor — continuously.
-
-If you run Claude Code on multiple machines, each device gets a unique permanent identifier. There is no built-in way to manage how your identity is presented to the API.
-
-CC Gateway is a reverse proxy that sits between Claude Code and the Anthropic API. It normalizes device identity, environment fingerprints, and process metrics to a single canonical profile — giving you control over what telemetry leaves your network.
-
-## Features
-
-- **Full identity rewrite** — device ID, email, session metadata, and the `user_id` JSON blob in every API request are normalized to one canonical identity
-- **40+ environment dimensions replaced** — platform, architecture, Node.js version, terminal, package managers, runtimes, CI flags, deployment environment — the entire `env` object is swapped, not patched
-- **System prompt sanitization** — the `<env>` block injected into every prompt (Platform, Shell, OS Version, working directory) is rewritten to match the canonical profile
-- **Billing header stripped** — the `x-anthropic-billing-header` (which contains a per-session fingerprint hash) is removed entirely, consistent with the official `CLAUDE_CODE_ATTRIBUTION_HEADER=false` toggle. This also enables [cross-session prompt cache sharing](https://github.com/anthropics/claude-code/issues/40652), reducing system prompt costs by ~85%
-- **Process metrics normalization** — physical RAM (`constrainedMemory`), heap size, and RSS are masked to canonical values so hardware differences don't leak
-- **Zero-login client setup** — clients receive a single launcher script. No browser OAuth, no `~/.zshrc` changes, no config files
-- **Centralized OAuth** — the gateway manages token refresh internally; client machines never contact `platform.claude.com`
-- **Instant startup** — gateway uses your existing access token on launch. No network call until the token actually expires
-- **Proxy-aware** — supports `HTTPS_PROXY` / `HTTP_PROXY` env vars for outbound connections (Clash, V2Ray, etc.)
-- **Telemetry leak prevention** — strips `baseUrl` and `gateway` fields that would reveal proxy usage in analytics events
-
-## Quick Start
-
-One command. Requires Node.js 22+ and an existing Claude Code login on this machine.
-
-```bash
-git clone https://github.com/motiful/cc-gateway.git
-cd cc-gateway
-npm install
-bash scripts/quick-setup.sh
+```mermaid
+flowchart LR
+  A[alice] & B[bob] & C[... more clients] -->|client token| N[nginx / TLS]
+  N --> G{{cc-gateway}}
+  G -->|pro-1 identity + token| U[api.anthropic.com]
+  G -->|pro-2 identity + token| U
+  G -->|pro-3 via its own proxy_url| P[HTTP proxy] --> U
 ```
 
-This will:
-1. Extract your OAuth credentials from macOS Keychain (access token + refresh token)
-2. Generate a canonical device identity and client token
-3. Write `config.yaml`
-4. Generate a client launcher at `./clients/cc-<hostname>`
-5. Start the gateway on `http://localhost:8443`
+### One request, step by step
 
-### Use it
+| # | Step | Can stop with |
+|---|------|---------------|
+| 1 | **Identify the client** by its token (`clients` table). | `401` unknown token |
+| 2 | **Load its account bindings** (`client_accounts`): each has a priority (lower is tried first) and its own cost limit. | `503` no account assigned |
+| 3 | **Pick an account**: walk the bindings by priority and take the first one that is enabled, has a valid token, and where this client's spend in the period (lifetime / monthly / daily, UTC) is under the limit. A limit of `0` means unlimited. Only billable `/v1/messages` requests are limit-gated. | `429` every usable account is over its limit (the body lists used/limit per account); `503` every account is disabled or needs re-login |
+| 4 | **Rewrite the identity** to the chosen account: `device_id`, email, env fingerprint, prompt env; mask the client's local paths. | |
+| 5 | **Forward** with the account's OAuth access token, through the account's `proxy_url` if set (otherwise the global `HTTPS_PROXY`, otherwise direct). | |
+| 6 | **Stream the response back**, un-mask paths, **record** cost per (client, account), and update that account's 5h/weekly quota from Anthropic's headers. | |
 
-In another terminal:
+The gateway does **not** fail over when Anthropic returns 429/401 mid-request: that request returns the real error, and a broken account is skipped from the next request on.
 
-```bash
-./clients/cc-<hostname>
+### Account lifecycle
+
+Each account keeps its own tokens and refresh timer, so one broken account never takes another down.
+
+```mermaid
+stateDiagram-v2
+  [*] --> uninitialized: Add account (dashboard)
+  uninitialized --> ok: Re-login (open link, paste code)
+  ok --> refreshing: 5 min before expiry
+  refreshing --> ok: refreshed
+  refreshing --> refreshing: transient error, retry 30s..10min
+  refreshing --> expired: refresh_token rejected
+  expired --> ok: Re-login
 ```
 
-That's it. Claude Code launches, traffic routes through the gateway. No env vars to set, no files to edit.
+Per account you can edit the label, email, env / prompt env overrides and an optional `proxy_url` (`http://user:pass@host:port`; the password is never shown back). With no `proxy_url`, every account goes out through the server's IP.
 
-### Behind a proxy?
+### Where state lives
 
-```bash
-HTTPS_PROXY=http://127.0.0.1:7890 bash scripts/quick-setup.sh
-```
+Everything is in `data/` (Docker volume or bind mount):
 
-The gateway will route all outbound traffic (API calls + token refresh) through your proxy.
+| Path | Contents |
+|------|----------|
+| `ccg.db` → `accounts` | OAuth tokens, identity and proxy per account |
+| `ccg.db` → `clients`, `client_accounts` | client tokens; bindings with priority + limit |
+| `ccg.db` → `request_metrics`, `users`, `meta` | per-request cost, admin users, setup state |
+| `config.yaml` | static settings + identity template for new accounts |
+| `backups/` | SQLite backups (the VPS deploy keeps 14) |
 
-## Add Clients
+The `oauth:` / `auth.tokens` keys of `config.yaml` are read **once**, to migrate an old single-account install into the database. After that, editing them has no effect; everything is managed in the dashboard.
 
-Each person gets their own launcher script with a unique token. The admin generates it:
+### Who does what
 
-```bash
-bash scripts/add-client.sh alice
-bash scripts/add-client.sh bob
-```
+- **Admin** (`/admin`): creates the first admin with the setup code printed in the logs; adds accounts and logs them in from the dashboard; creates clients and assigns accounts in priority order with per-pair limits; watches cost per client/account and each account's 5h/weekly quota.
+- **Client user**: installs the launcher once and uses Claude Code normally; sees the remaining limit per account at `/portal`.
 
-This creates `./clients/cc-alice` and `./clients/cc-bob`. Send each file to the respective person.
+## What gets rewritten
 
-### Client setup (what you tell them)
-
-```bash
-chmod +x cc-alice
-./cc-alice install        # installs as 'ccg' command
-ccg                       # start Claude Code through gateway
-```
-
-That's it. All Claude arguments work: `ccg --print "hello"`, `ccg --resume`, etc.
-
-### Optional: make `claude` go through gateway too
-
-```bash
-ccg hijack                # alias claude → ccg (new terminals auto-apply)
-claude                    # now goes through gateway
-ccg release               # undo — restore native claude
-```
-
-### All commands
-
-```
-ccg                       Start Claude Code through gateway
-ccg install               Install as 'ccg' system command
-ccg uninstall             Remove 'ccg' and clean up
-ccg hijack                Make 'claude' also go through gateway
-ccg release               Restore 'claude' to native
-ccg native [args]         Run native claude once (bypass gateway)
-ccg status                Show gateway connection and hijack status
-ccg help                  Show help
-```
-
-`ccg` and `claude` coexist by default. Hijack is opt-in and reversible. Supports zsh, bash, and fish.
-
-## What Gets Rewritten
+Every value below comes from the **account chosen** for that request (accounts without their own value use the template in `config.yaml`).
 
 | Layer | Field | Action |
 |-------|-------|--------|
-| **Identity** | `device_id` in metadata + events | → canonical ID |
-| | `email` | → canonical email |
-| **Environment** | `env` object (40+ fields) | → entire object replaced |
-| **Process** | `constrainedMemory` (physical RAM) | → canonical value |
-| | `rss`, `heapTotal`, `heapUsed` | → randomized in realistic range |
-| **Headers** | `User-Agent` | → canonical CC version |
-| | `x-api-key` | → real OAuth token (injected by gateway) |
-| | `x-anthropic-billing-header` | → stripped |
-| **Prompt text** | `Platform`, `Shell`, `OS Version` | → canonical values |
-| | `Working directory` | → canonical path |
-| | `/Users/xxx/`, `/home/xxx/` | → canonical home prefix |
-| **Billing** | `x-anthropic-billing-header` system block | → stripped entirely |
-| **Leak fields** | `baseUrl` (ANTHROPIC_BASE_URL) | → stripped |
-| | `gateway` (provider detection) | → stripped |
+| Identity | `device_id` in metadata and events | replaced by the account's `device_id` |
+| | `email` | replaced by the account's email |
+| Environment | `env` object (40+ fields) | whole object replaced |
+| Process | `constrainedMemory`, `rss`, `heapTotal`, `heapUsed` | normalized to fixed values / ranges |
+| Headers | `User-Agent` | canonical Claude Code version (auto-updated daily) |
+| | client `x-api-key` | replaced by the account's OAuth access token |
+| | `x-anthropic-billing-header` | stripped |
+| Prompt | `Platform`, `Shell`, `OS Version`, `Working directory` | replaced by `prompt_env` |
+| | paths like `/Users/xxx/`, `/home/xxx/`, `C:\Users\xxx\` | masked to a canonical path, reversed in the response |
+| Telemetry | `baseUrl`, `gateway` | stripped so the gateway is not revealed |
 
-## Deployment
+## Installation
 
-### Local (development)
+### Docker on a fresh server
+
+No Claude login on the server and no mounted credentials needed.
 
 ```bash
-npm run dev    # tsx watch, auto-reload
+git clone https://github.com/vuluu2k/cc-gateway.git && cd cc-gateway
+docker compose -f deploy/vps/docker-compose.yml up -d --build
+docker compose -f deploy/vps/docker-compose.yml logs gateway | grep -i 'setup code'
 ```
 
-### Docker (production)
+1. The container boots with zero accounts and prints a **setup code** (single use, expires after 24 hours; restart the container to print a new one).
+2. Open `https://<domain>/admin` and enter a username, password and the setup code to create the first admin.
+3. **Accounts → Add account**, then **Re-login**: open the Claude link, approve, and paste the code into the box below it.
+4. **Clients → + Add client** to create a client and download its launcher; on that client's row, **Accounts for this client** assigns accounts (priority, limit, period).
+
+The gateway serves HTTP on port `8443`, bound to `127.0.0.1` by default; set `BIND_IP=<private IP>` in `deploy/vps/.env` if the reverse proxy runs on another machine. Put a TLS reverse proxy in front (nginx, Caddy, Traefik…) and forward `Host` and `X-Forwarded-Proto` (see [`deploy/vps/nginx-ccg.conf`](deploy/vps/nginx-ccg.conf)). Data lives in `data/` next to the repo.
+
+### Automatic deploy to a VPS
+
+Push to `main` → a GitHub Actions runner installed on the VPS backs up the DB, rebuilds and restarts the container, then checks `/_health`. Runner setup, repo variables and the backup cron: [`deploy/vps/README.md`](deploy/vps/README.md). If the repo is public, you **must** enable *Require approval for all external contributors* for fork pull request workflows.
+
+### Local development
+
+Requires Node.js 22+.
 
 ```bash
-bash scripts/admin-setup.sh
+npm install
+npm run dev        # tsx watch with auto-reload; default config at ./data/config.yaml
+npm test           # all tests (tsx + assert)
+npm run build      # compile to dist/
 ```
 
-This interactive script:
-1. Extracts OAuth credentials
-2. Generates config + first client launcher
-3. Builds and starts the Docker container
-4. Asks for the gateway address clients should connect to
+On a Mac already logged in to Claude Code, `bash scripts/quick-setup.sh` reads the credentials from the Keychain, writes `config.yaml` and a launcher; on first start that account is imported into the database as account `default`.
 
-After setup, add more clients with:
+## Client usage
+
+The admin sends the `cc-<name>` launcher downloaded from the dashboard. The user runs:
 
 ```bash
-bash scripts/add-client.sh <name>
-# Restart to pick up new tokens:
-docker compose restart
+chmod +x cc-alice
+./cc-alice install        # installs the 'ccg' command
+ccg                       # run Claude Code through the gateway
 ```
 
-### Multi-machine deployment
-
 ```
-Mac-A ──┐
-Mac-B ──┼──→ gateway-server:8443 ──→ api.anthropic.com
-Mac-C ──┘
-```
-
-**Important:** All machines — including the admin — should use the gateway. Direct connections from the admin machine would create a second device fingerprint visible to Anthropic.
-
-For remote deployment, generate TLS certificates:
-
-```bash
-mkdir certs
-openssl req -x509 -newkey rsa:2048 \
-  -keyout certs/key.pem -out certs/cert.pem \
-  -days 365 -nodes -subj "/CN=cc-gateway"
+ccg                       Run Claude Code through the gateway (all claude arguments work)
+ccg install / uninstall   Install / remove the 'ccg' command
+ccg hijack / release      Route 'claude' through the gateway too / restore it
+ccg native [args]         Run the native claude once, bypassing the gateway
+ccg status                Check the connection to the gateway
 ```
 
-Uncomment the `tls` section in `config.yaml`, then generate client launchers pointing to the server address:
+Remaining limit per account: `https://<domain>/portal`.
 
-```bash
-bash scripts/add-client.sh alice "" <gateway-ip>:8443 https
-```
+## Configuration
 
-### Alternative: Tailscale (zero config networking)
+`data/config.yaml` is generated on first start and only holds static settings:
 
-If all devices have Tailscale installed, run the gateway on any machine in the mesh. No TLS needed (Tailscale encrypts the tunnel), no public IP needed, no port forwarding.
+| Key | Meaning |
+|-----|---------|
+| `server.port`, `server.tls` | listen port; TLS if there is no reverse proxy in front |
+| `upstream.url` | defaults to `https://api.anthropic.com` |
+| `identity`, `env`, `prompt_env`, `process` | identity and fingerprint **template** for new accounts; each account can override them in the dashboard |
+| `logging`, `db.path` | log level; SQLite path |
 
-## Architecture
+Accounts, clients, bindings and limits are **not** in `config.yaml`; they live in the database and are managed in the dashboard.
 
-```
-Client machines                        CC Gateway                    Anthropic
-┌────────────┐                    ┌──────────────────┐
-│ ./cc-alice  │── ANTHROPIC_ ────│  Auth: x-api-key  │
-│  (launcher) │   BASE_URL       │  OAuth: auto-     │
-│  + env vars │                  │    refresh        │──── single ────▶ api.anthropic.com
-│             │                  │  Rewrite: all     │     identity
-│             │                  │    identity       │
-└────────────┘                    │  Strip: billing   │
-                                  │    header         │
-                                  │  Stream: SSE      │
-                                  │    passthrough    │
-                                  └──────────────────┘
-                                         │
-                                   platform.claude.com
-                                   (token refresh only,
-                                    from gateway IP)
-```
-
-**Defense in depth:**
-
-| Layer | Mechanism | What it prevents |
-|-------|-----------|-----------------|
-| Launcher env vars | `ANTHROPIC_BASE_URL` + `DISABLE_NONESSENTIAL` + `ATTRIBUTION_HEADER=false` | CC voluntarily routes to gateway, disables side channels, skips billing hash |
-| Clash (optional) | Domain-based REJECT rules | Any accidental or future direct connections to Anthropic |
-| Gateway | Body + header + prompt rewriting | All 40+ fingerprint dimensions normalized to one device |
-
-## OAuth Lifecycle
-
-The gateway manages the full OAuth token lifecycle:
-
-1. **Startup** — uses the existing access token from your keychain. Zero network calls.
-2. **Auto-refresh** — 5 minutes before expiry, the gateway silently refreshes via `platform.claude.com`.
-3. **Continuous** — refresh tokens rotate automatically. The gateway runs indefinitely without admin intervention.
-4. **Failure recovery** — if a refresh fails, retries every 30 seconds. Only a refresh token expiry (rare, months) requires re-running `extract-token.sh`.
-
-Clients never contact `platform.claude.com`. They send requests to the gateway with their client token; the gateway injects the real OAuth token before forwarding upstream.
-
-## Clash Rules
-
-Optional network-level safety net. Even if Claude Code bypasses env vars or adds new hardcoded endpoints in a future update, Clash blocks direct connections.
-
-```yaml
-rules:
-  - DOMAIN,gateway.your-domain.com,DIRECT    # Allow gateway
-  - DOMAIN-SUFFIX,anthropic.com,REJECT        # Block direct API
-  - DOMAIN-SUFFIX,claude.com,REJECT           # Block OAuth
-  - DOMAIN-SUFFIX,claude.ai,REJECT            # Block OAuth
-  - DOMAIN-SUFFIX,datadoghq.com,REJECT        # Block telemetry
-```
-
-See [`clash-rules.yaml`](clash-rules.yaml) for the full template.
+| Environment variable | Effect |
+|----------------------|--------|
+| `CCG_CONFIG_PATH` | path to `config.yaml` (default `/app/data/config.yaml`) |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | shared proxy for accounts without their own `proxy_url` |
+| `CCG_REFRESH_TOKEN` (or `CCG_CREDENTIALS_PATH`) | optional: seed the first account on a fresh server and skip the browser login |
+| `CCG_DISABLE_VERSION_AUTOUPDATE` | disable the daily Claude Code version update |
 
 ## Caveats
 
-- **MCP servers** — `mcp-proxy.anthropic.com` is hardcoded and does not follow `ANTHROPIC_BASE_URL`. If clients use official MCP servers, those requests bypass the gateway. Use Clash to block this domain if MCP is not needed.
-- **CC updates** — New Claude Code versions may introduce new telemetry fields or endpoints. Monitor Clash REJECT logs for unexpected connection attempts after upgrades.
-- **Token lifecycle** — The gateway auto-refreshes the OAuth access token. If the underlying refresh token expires (rare), re-run `extract-token.sh` on the admin machine.
-
-## Changelog
-
-### v0.2.0 (2026-04-02)
-
-**Billing header strategy overhaul**
-- Stripped the `x-anthropic-billing-header` entirely (system prompt block + HTTP header) instead of rewriting the hash. This is consistent with the official `CLAUDE_CODE_ATTRIBUTION_HEADER=false` env var and enables cross-session prompt cache sharing (~85% cost reduction on system prompt).
-- The CCH hash algorithm (reverse-engineered from `cli.js`) is implemented as a fallback but not active by default.
-
-**Zero-login client setup**
-- New `add-client.sh` generates self-contained launcher scripts (`./clients/cc-<name>`). Clients run one file — no `~/.zshrc` changes, no config files, no browser login.
-- Launcher uses `ANTHROPIC_API_KEY` for gateway auth instead of the fragile `CLAUDE_CODE_OAUTH_TOKEN` + `ANTHROPIC_CUSTOM_HEADERS` approach.
-
-**Instant gateway startup**
-- OAuth now uses the existing access token from Keychain on launch. No network call until the token actually needs refreshing.
-- `config.yaml` supports `access_token` + `expires_at` fields alongside `refresh_token`.
-
-**Proxy support**
-- Gateway respects `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` env vars for all outbound connections (API calls + token refresh).
-
-**Observability**
-- Connection-level request logging: every inbound request is logged with client IP before auth, and client name after auth.
-
-**Admin tooling**
-- `admin-setup.sh` — interactive Docker deployment with credential extraction and client generation.
-- `quick-setup.sh` — one-command local setup that extracts full credentials (access + refresh + expiry).
-
-### v0.1.0 (2026-04-01)
-
-Initial release. Identity rewriting, environment normalization, centralized OAuth, SSE passthrough.
-
-## References
-
-This project builds on:
-
-- [Claude Code 封号机制深度探查报告](https://bytedance.larkoffice.com/docx/E2JudVzf7oCNfhxyxaQcZIW1n0g) — Reverse-engineering analysis of Claude Code's 640+ telemetry events, 40+ fingerprint dimensions, and ban detection mechanisms
-- [cc-cache-audit](https://github.com/motiful/cc-cache-audit) — A/B test proving the billing header breaks prompt cache sharing, with the one-line fix
-- [instructkr/claude-code](https://github.com/instructkr/claude-code) — Deobfuscated Claude Code source used for the telemetry audit
-
-## Star History
-
-<div align="center">
-  <a href="https://star-history.com/#motiful/cc-gateway&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=motiful/cc-gateway&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=motiful/cc-gateway&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=motiful/cc-gateway&type=Date" width="600" />
-    </picture>
-  </a>
-</div>
-
-## Why This Exists
-
-I pay Anthropic $200/month. I have for almost a year.
-
-I own a laptop, a desktop, and a tablet. Three devices, one person, one subscription. I logged into a fourth device and my account was banned. No warning. No explanation. No refund. No way to export my conversation history. No customer support to contact.
-
-I'm not in the US. For non-US subscribers, there is no appeals process. The ban is permanent and silent.
-
-This project is not a hack. It is not a crack. It does not bypass rate limits, share accounts, or steal service. It is a reverse proxy that makes my own devices — devices I already paid for access to — present a consistent identity to an API that I already pay for.
-
-The technical approach is conservative by design:
-
-- **Billing header**: stripped using the same official env var (`CLAUDE_CODE_ATTRIBUTION_HEADER=false`) that Anthropic built into their own code. Thousands of legitimate users already have this set.
-- **Identity normalization**: all devices report the same device ID, email, and environment. This is indistinguishable from one person using one machine.
-- **Fixed IP**: the gateway routes all traffic through a single static IP. Anthropic sees one device, one location, one user.
-- **No evasion**: we don't fake locations, rotate IPs, or circumvent rate limits. If Anthropic's detection looks at this traffic, it looks normal — because it IS normal. One person using their subscription.
-
-If Anthropic offered a way to manage multiple devices — a device dashboard, a family plan, a per-seat enterprise option — this tool would not need to exist. They don't. So it does.
-
-## Disclaimer
-
-This project is for educational and research purposes only.
-
-- Do NOT use this to share accounts or violate Anthropic's Terms of Service
-- Do NOT use this for commercial purposes
-- The author is not responsible for any consequences of using this software
-- Use at your own risk
+- **No failover on upstream errors.** An account rate-limited by Anthropic (429) or with an expired session (401) fails that request for real; only *your own* cost limits move a client to the next account.
+- **Shared IP.** Accounts without a `proxy_url` all go out through the server's IP. To give an account its own IP, set an HTTP(S) proxy for it (SOCKS is not supported).
+- **Official MCP servers** (`mcp-proxy.anthropic.com`) ignore `ANTHROPIC_BASE_URL` and bypass the gateway. You can block them with Clash; see [`clash-rules.yaml`](clash-rules.yaml).
+- **New Claude Code versions** may add telemetry fields or endpoints; re-check after upgrading.
+- **Route every machine through the gateway**, the admin's included, so no second fingerprint shows up for the same account.
 
 ## License
 
-[MIT](LICENSE)
-
----
-
-<div align="center">
-  <sub>Crafted with <a href="https://github.com/anthropics/claude-code">Claude Code</a></sub>
-</div>
-
-<!-- Badge references -->
-[license-shield]: https://img.shields.io/github/license/motiful/cc-gateway
-[license-url]: https://github.com/motiful/cc-gateway/blob/main/LICENSE
-[version-shield]: https://img.shields.io/badge/version-0.2.0--alpha-blue
-[version-url]: https://github.com/motiful/cc-gateway/releases
-[tests-shield]: https://img.shields.io/badge/tests-16%20passed-brightgreen
-[tests-url]: https://github.com/motiful/cc-gateway/blob/main/tests/rewriter.test.ts
-[twitter-shield]: https://img.shields.io/badge/follow-%40whiletrue0x-1DA1F2?logo=x&logoColor=white
-[twitter-url]: https://x.com/whiletrue0x
+MIT, see [`LICENSE`](LICENSE).

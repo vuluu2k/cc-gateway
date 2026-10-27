@@ -1,13 +1,13 @@
-// Live rate-limit / quota snapshot for the shared OAuth (Claude subscription)
+// Live rate-limit / quota snapshot per upstream OAuth (Claude subscription)
 // account. Anthropic returns an `anthropic-ratelimit-unified-*` header family on
 // EVERY /v1/messages response (not just 429s) describing how much of the account's
 // 5-hour rolling window and 7-day (weekly) window is consumed. Claude Code reads
 // these headers but doesn't persist them; the gateway can, so the admin dashboard
 // can show "session used %", "weekly used %", and when each window resets.
 //
-// The account is shared across all gateway clients, so a single module-level
-// snapshot (the most recent response we saw) is the right granularity. It's kept
-// in memory only — it's inherently live state, and the next request repopulates it
+// Each upstream account has its own 5h/weekly windows, so snapshots are keyed by
+// account id (the most recent response seen for that account). They're kept in
+// memory only — it's inherently live state, and the next request repopulates it
 // after a restart.
 //
 // Design note: we capture EVERY `anthropic-ratelimit-*` header verbatim into `raw`
@@ -42,7 +42,7 @@ export interface RateLimitSnapshot {
   raw: Record<string, string>
 }
 
-let latest: RateLimitSnapshot | null = null
+const latest = new Map<string, RateLimitSnapshot>()
 
 const PREFIX = 'anthropic-ratelimit-'
 
@@ -78,6 +78,7 @@ function buildWindow(raw: Record<string, string>, key: '5h' | '7d'): QuotaWindow
  * it unconditionally on every proxied response.
  */
 export function captureRateLimitHeaders(
+  accountId: string,
   headers: Record<string, string | string[] | undefined>,
 ): void {
   const raw: Record<string, string> = {}
@@ -94,7 +95,7 @@ export function captureRateLimitHeaders(
   )
   const fiveH = windows.find((w) => w.key === '5h')
 
-  latest = {
+  latest.set(accountId, {
     capturedAt: Date.now(),
     overallStatus: raw[`${PREFIX}unified-status`],
     representative: raw[`${PREFIX}unified-representative-claim`],
@@ -102,15 +103,15 @@ export function captureRateLimitHeaders(
     sessionWindowStartMs:
       fiveH?.resetMs != null ? fiveH.resetMs - FIVE_HOURS_MS : undefined,
     raw,
-  }
+  })
 }
 
-/** Latest captured quota snapshot, or null if we haven't seen any headers yet. */
-export function getRateLimitSnapshot(): RateLimitSnapshot | null {
-  return latest
+/** Latest captured quota snapshot per account id; accounts never seen are absent. */
+export function getRateLimitSnapshots(): Record<string, RateLimitSnapshot> {
+  return Object.fromEntries(latest)
 }
 
-/** Test hook — clear the in-memory snapshot. */
+/** Test hook — clear every in-memory snapshot. */
 export function _resetRateLimitSnapshot(): void {
-  latest = null
+  latest.clear()
 }

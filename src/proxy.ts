@@ -5,26 +5,33 @@ import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import zlib from 'zlib'
 import type { Config } from './config.js'
-import { authenticate, initAuth, setAuthTokens } from './auth.js'
+import { authenticate, reloadClients } from './auth.js'
+import { listAccountRows, listClientRows, listBindings, replaceBindings, getAccountRow } from './accounts-store.js'
 import {
-  getAccessToken,
-  getOAuthStatus,
-  beginOAuthLogin,
-  completeOAuthLogin,
-  cancelOAuthLogin,
-} from './oauth.js'
+  listAccounts,
+  getAccountView,
+  createAccount,
+  updateAccount,
+  deleteAccount,
+  isUsable,
+  beginLogin,
+  completeLogin,
+  cancelLogin,
+  selectAccountFor,
+} from './accounts.js'
+import { effectiveConfigFor } from './effective-config.js'
 import { rewriteBody, rewriteHeaders, extractReversePathMap, createPathReplacer, type RewriteInfo } from './rewriter.js'
 import { extractRequestPreview } from './preview.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { recordRequest, getMetricsSnapshot, getClientCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
+import { recordRequest, getMetricsSnapshot, getAccountUsageTotals, getClientAccountCostSince, getClientStats, getClientModels, getClientRecent, periodStart } from './metrics.js'
 import { SSEUsageParser } from './usage-parser.js'
 import { computeCost } from './pricing.js'
 import { captureRateLimitHeaders } from './ratelimit.js'
 import { renderDashboard, renderLogin } from './dashboard.js'
 import { renderPortal, renderPortalLogin } from './portal.js'
 import { renderLanding } from './landing.js'
-import { authenticateUser } from './users.js'
+import { authenticateUser, countUsers, createUser, checkSetupCode, clearSetupCode } from './users.js'
 import {
   generateAndSetClientPassword,
   verifyClientPassword,
@@ -45,22 +52,28 @@ import {
   createInstallGrant,
   verifyInstallGrant,
 } from './session.js'
-import { addClient, listClients, removeClient, setClientLimit, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
-import type { CostLimitPeriod } from './config.js'
-
-/** Refresh in-memory token map from current config.yaml on disk. */
-function reloadAuthFromConfig(): void {
-  setAuthTokens(listClients())
-}
+import { addClient, listClients, removeClient, setClientHomeDir, buildLauncherScript, buildPowerShellLauncherScript, buildUnixInstaller, buildPowerShellInstaller } from './clients.js'
+import type { LimitPeriod } from './accounts-store.js'
 
 export function startProxy(config: Config) {
-  initAuth(config)
+  reloadClients()
 
   const upstream = new URL(config.upstream.url)
   const useTls = config.server.tls?.cert && config.server.tls?.key
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleRequest(req, res, config, upstream)
+    // One throw inside a request (a malformed %-escape, a DB read) must fail
+    // that request only. Uncaught, the rejection kills the process and every
+    // account's in-flight traffic with it.
+    handleRequest(req, res, config, upstream).catch((err) => {
+      log('error', `Request ${req.method} ${req.url} crashed: ${err instanceof Error ? err.stack || err.message : err}`)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Internal gateway error' }))
+      } else {
+        res.destroy()
+      }
+    })
   }
 
   let server
@@ -78,8 +91,11 @@ export function startProxy(config: Config) {
   server.listen(config.server.port, () => {
     log('info', `CC Gateway listening on ${useTls ? 'https' : 'http'}://0.0.0.0:${config.server.port}`)
     log('info', `Upstream: ${config.upstream.url}`)
-    log('info', `Canonical device_id: ${config.identity.device_id.slice(0, 8)}...`)
-    log('info', `Authorized clients: ${config.auth.tokens.map(t => t.name).join(', ')}`)
+    const clients = listClientRows()
+    log('info', `Accounts: ${listAccountRows().length}, clients: ${clients.length}`)
+    if (clients.length > 0) {
+      log('info', `Authorized clients: ${clients.map((c) => c.name).join(', ')}`)
+    }
   })
 
   return server
@@ -101,19 +117,19 @@ async function handleRequest(
 
   // Health check - no auth required
   if (pathname === '/_health') {
-    const oauthOk = !!getAccessToken()
-    const oauthStatus = getOAuthStatus()
-    const status = oauthOk ? 200 : 503
-    res.writeHead(status, { 'Content-Type': 'application/json' })
+    const accounts = listAccounts()
+    const usable = accounts.filter((a) => isUsable(a.id))
+    // Always 200 while the process is serving. The container's healthcheck reads
+    // this, and an unhealthy container is dropped from Traefik's pool - which
+    // would take the dashboard down exactly when an admin needs it to re-login.
+    // Degraded upstream state belongs in the body, not the status code.
+    res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
-      status: oauthOk ? 'ok' : 'degraded',
-      oauth: oauthOk ? 'valid' : 'expired/refreshing',
-      oauth_state: oauthStatus.state,
-      oauth_error: oauthStatus.last_error,
-      canonical_device: config.identity.device_id.slice(0, 8) + '...',
-      canonical_platform: config.env.platform,
+      status: usable.length > 0 ? 'ok' : 'degraded',
+      accounts_total: accounts.length,
+      accounts_usable: usable.length,
+      accounts_expired: accounts.filter((a) => a.state === 'expired').map((a) => a.id),
       upstream: config.upstream.url,
-      clients: config.auth.tokens.map(t => t.name),
     }))
     return
   }
@@ -130,10 +146,10 @@ async function handleRequest(
     pathname === '/_metrics' ||
     pathname === '/api/clients' ||
     pathname.startsWith('/api/clients/') ||
-    pathname === '/api/oauth' ||
-    pathname.startsWith('/api/oauth/')
+    pathname === '/api/accounts' ||
+    pathname.startsWith('/api/accounts/')
   ) {
-    await handleDashboardArea(req, res, pathname, method)
+    await handleDashboardArea(req, res, pathname, method, config)
     return
   }
 
@@ -167,45 +183,20 @@ async function handleRequest(
   }
   const clientName = tokenEntry.name
 
-  // Cost limit enforcement: only gates billable inference (/v1/messages).
-  // Health, settings, event_logging, etc. are free and shouldn't be blocked.
-  if (pathname.startsWith('/v1/messages') && tokenEntry.cost_limit_usd && tokenEntry.cost_limit_usd > 0) {
-    const since = periodStart(tokenEntry.cost_limit_period)
-    const used = getClientCostSince(clientName, since)
-    if (used >= tokenEntry.cost_limit_usd) {
-      const periodLabel = tokenEntry.cost_limit_period || 'lifetime'
-      res.writeHead(429, { 'Content-Type': 'application/json', 'x-ccg-error': 'cost-limit' })
-      res.end(JSON.stringify({
-        error: 'Cost limit reached',
-        client: clientName,
-        period: periodLabel,
-        used_usd: Number(used.toFixed(4)),
-        limit_usd: tokenEntry.cost_limit_usd,
-      }))
-      log('warn', `Client "${clientName}" blocked: ${periodLabel} cost ${used.toFixed(4)} >= limit ${tokenEntry.cost_limit_usd}`)
-      recordRequest({
-        ts: startedAt,
-        client: clientName,
-        method,
-        path: pathname,
-        status: 429,
-        durationMs: Date.now() - startedAt,
-        errorSource: 'gateway',
-        errorDetail: `cost limit reached: ${used.toFixed(4)}/${tokenEntry.cost_limit_usd} USD (${periodLabel})`,
-      })
-      if (config.logging.audit) audit(clientName, method, path, 429)
-      return
-    }
-  }
-
-  log('info', `Client "${clientName}" → ${method} ${path}`)
-
-  // Get the real OAuth token (managed by gateway)
-  const oauthToken = getAccessToken()
-  if (!oauthToken) {
-    res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'oauth-refreshing' })
-    res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
-    log('error', 'No valid OAuth token available')
+  // Account selection: only gates billable inference (/v1/messages). Health,
+  // settings, event_logging, etc. are free and shouldn't be blocked.
+  // listBindings/getAccountRow (used inside selectAccountFor) are not wrapped
+  // in try/catch, unlike getClientAccountCostSince which returns 0 on error -
+  // a DB failure here must become a clean 503, not an unhandled throw.
+  const billable = pathname.startsWith('/v1/messages')
+  let selected: ReturnType<typeof selectAccountFor>
+  try {
+    selected = selectAccountFor(clientName, billable)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    log('error', `Account selection failed for "${clientName}": ${detail}`)
+    res.writeHead(503, { 'Content-Type': 'application/json', 'x-ccg-error': 'account-lookup-failed' })
+    res.end(JSON.stringify({ error: 'Account lookup failed, try again' }))
     recordRequest({
       ts: startedAt,
       client: clientName,
@@ -214,11 +205,72 @@ async function handleRequest(
       status: 503,
       durationMs: Date.now() - startedAt,
       errorSource: 'gateway',
-      errorDetail: 'oauth token unavailable (refreshing)',
+      errorDetail: `account lookup failed: ${detail}`,
     })
     if (config.logging.audit) audit(clientName, method, path, 503)
     return
   }
+
+  if (!selected.ok) {
+    const status = selected.reason === 'quota' ? 429 : 503
+    const payload =
+      selected.reason === 'quota'
+        ? {
+            error: 'Cost limit reached on every usable account',
+            client: clientName,
+            note: 'Accounts that are disabled or need re-login are not listed here',
+            accounts: selected.blocked.map((b) => ({
+              account: b.accountId,
+              period: b.limitPeriod,
+              used_usd: Number(b.usedUsd.toFixed(4)),
+              limit_usd: b.limitUsd,
+            })),
+          }
+        : selected.reason === 'no-bindings'
+          ? {
+              error: 'No upstream account assigned to this client',
+              client: clientName,
+              hint: 'Assign one from the admin dashboard → Clients → Accounts',
+            }
+          : {
+              error: 'No usable upstream account',
+              client: clientName,
+              hint: 'Every assigned account is disabled or needs re-login',
+            }
+
+    const detail =
+      selected.reason === 'quota'
+        ? `cost limit reached on all ${selected.blocked.length} usable account(s)`
+        : selected.reason === 'no-bindings'
+          ? 'client has no account bindings'
+          : 'no usable account'
+
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'x-ccg-error': selected.reason === 'quota' ? 'cost-limit' : 'no-account',
+    })
+    res.end(JSON.stringify(payload))
+    log('warn', `Client "${clientName}" blocked: ${detail}`)
+    recordRequest({
+      ts: startedAt,
+      client: clientName,
+      method,
+      path: pathname,
+      status,
+      durationMs: Date.now() - startedAt,
+      errorSource: 'gateway',
+      errorDetail: detail,
+    })
+    if (config.logging.audit) audit(clientName, method, path, status)
+    return
+  }
+
+  const accountId = selected.accountId
+  // Identity/env for THIS request belong to the chosen account, not the gateway.
+  const reqConfig = effectiveConfigFor(config, selected.row)
+  const oauthToken = selected.accessToken
+
+  log('info', `Client "${clientName}" → ${method} ${path}`)
 
   // Collect request body
   const chunks: Buffer[] = []
@@ -241,14 +293,14 @@ async function handleRequest(
   // file tool calls still hit real paths instead of the canonical /Users/jack.
   const reversePairs =
     body.length > 0 && pathname.startsWith('/v1/messages')
-      ? extractReversePathMap(body, config, tokenEntry.home_dir)
+      ? extractReversePathMap(body, reqConfig, tokenEntry.homeDir)
       : []
 
   // Rewrite identity fields in body
   const rewriteInfo: RewriteInfo = {}
   if (body.length > 0) {
     try {
-      body = rewriteBody(body, path, config, rewriteInfo) as Buffer<ArrayBuffer>
+      body = rewriteBody(body, path, reqConfig, rewriteInfo) as Buffer<ArrayBuffer>
     } catch (err) {
       log('error', `Body rewrite failed for ${path}: ${err}`)
     }
@@ -257,7 +309,7 @@ async function handleRequest(
   // Rewrite headers (strips client auth, normalizes identity headers)
   const rewrittenHeaders = rewriteHeaders(
     req.headers as Record<string, string | string[] | undefined>,
-    config,
+    reqConfig,
   )
 
   // Inject the OAuth access_token. Anthropic OAuth tokens (sk-ant-oat01-) must
@@ -280,7 +332,7 @@ async function handleRequest(
   // Forward to upstream
   const upstreamUrl = new URL(path, upstream)
 
-  const agent = getProxyAgent()
+  const agent = getProxyAgent(selected.row.proxyUrl)
   const proxyReq = httpsRequest(
     upstreamUrl,
     {
@@ -295,17 +347,17 @@ async function handleRequest(
     (proxyRes) => {
       const status = proxyRes.statusCode || 502
 
-      // Snapshot the account-wide quota headers (anthropic-ratelimit-unified-*)
+      // Snapshot this account's quota headers (anthropic-ratelimit-unified-*)
       // Anthropic returns on every /v1/messages response — the dashboard surfaces
-      // 5h/weekly "session used %" and reset times from this. No-op when absent.
-      captureRateLimitHeaders(proxyRes.headers)
+      // 5h/weekly "session used %" and reset times per account. No-op when absent.
+      captureRateLimitHeaders(accountId, proxyRes.headers)
 
       // Surface upstream throttling distinctly from the gateway's own
       // cost-limit 429 (handled above). Anthropic returns 429 (rate_limit_error)
-      // or 529 (overloaded) when our shared OAuth account hits its rate cap; the
+      // or 529 (overloaded) when the selected OAuth account hits its rate cap; the
       // client retries per retry-after and usually gets 200 on the next attempt,
       // which is the "429 rồi lại 200" pattern. Logging it explicitly makes the
-      // shared-account throttling visible instead of looking like a cost block.
+      // per-account throttling visible instead of looking like a cost block.
       if (status === 429 || status === 529) {
         const retryAfter = proxyRes.headers['retry-after']
         // Anthropic tells us exactly which bucket is exhausted via its
@@ -313,13 +365,13 @@ async function handleRequest(
         // / tokens), and for OAuth/Claude-subscription accounts via the
         // anthropic-ratelimit-unified-* family (5h + weekly usage windows).
         // Surfacing them turns "mystery 429" into a named limit so we can tell a
-        // big-single-request ITPM hit apart from a shared-account usage cap.
+        // big-single-request ITPM hit apart from an account usage cap.
         const rateLimitHeaders = Object.entries(proxyRes.headers)
           .filter(([k]) => k.toLowerCase().startsWith('anthropic-ratelimit'))
           .map(([k, v]) => `${k}=${v}`)
         log(
           'warn',
-          `Upstream throttled "${clientName}": ${status} ${method} ${path}` +
+          `Upstream throttled "${clientName}" on account "${accountId}": ${status} ${method} ${path}` +
             (retryAfter ? ` (retry-after: ${retryAfter}s)` : '') +
             (rateLimitHeaders.length ? ` [${rateLimitHeaders.join(' ')}]` : ''),
         )
@@ -365,6 +417,7 @@ async function handleRequest(
         recordRequest({
           ts: startedAt,
           client: clientName,
+          accountId,
           method,
           path: pathname,
           status,
@@ -550,6 +603,7 @@ async function handleRequest(
     recordRequest({
       ts: startedAt,
       client: clientName,
+      accountId,
       method,
       path: pathname,
       status: 502,
@@ -634,11 +688,57 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
   return Buffer.concat(chunks)
 }
 
+// Only these six fields may be patched. `updateAccountRow` whitelists by
+// column name, and that whitelist includes refresh_token, access_token,
+// state and device_id - so handing it a raw JSON body would let an admin
+// overwrite an account's live tokens through the settings form.
+// Values inside env/promptEnv must be primitives: they are spread into
+// Config.env, which rewriter.ts reads as string | boolean | number, and a
+// nested object would reach the outgoing request fingerprint unchecked.
+const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv', 'proxyUrl'] as const
+
+/** Account views plus lifetime spend per account (spec 8.1). */
+function accountsWithUsage() {
+  const usage = getAccountUsageTotals()
+  return listAccounts().map((a) => ({ ...a, usage: usage[a.id] || { costUsd: 0, requests: 0 } }))
+}
+
+export function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Body must be a JSON object')
+  const src = raw as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of ACCOUNT_PATCHABLE) {
+    if (!(key in src)) continue
+    const value = src[key]
+    if (key === 'enabled') {
+      if (typeof value !== 'boolean') throw new Error('enabled must be a boolean')
+      out[key] = value
+    } else if (key === 'env' || key === 'promptEnv') {
+      if (value === null) { out[key] = null; continue }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`${key} must be an object or null`)
+      }
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const t = typeof v
+        if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+          throw new Error(`${key}.${k} must be a string, number or boolean`)
+        }
+      }
+      out[key] = value
+    } else {
+      if (typeof value !== 'string') throw new Error(`${key} must be a string`)
+      out[key] = key === 'proxyUrl' ? value.trim() : value
+    }
+  }
+  return out
+}
+
 async function handleDashboardArea(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
   method: string,
+  config: Config,
 ) {
   const secure = isSecureRequest(req)
 
@@ -667,7 +767,7 @@ async function handleDashboardArea(
         return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(renderLogin())
+      res.end(renderLogin(undefined, countUsers() === 0))
       return
     }
     if (method === 'POST') {
@@ -682,6 +782,34 @@ async function handleDashboardArea(
       const params = new URLSearchParams(body.toString('utf-8'))
       const username = (params.get('username') || '').trim()
       const password = params.get('password') || ''
+
+      // First-time setup: no users yet, so the POST creates the first admin,
+      // gated by the one-time code printed in the server log.
+      if (countUsers() === 0) {
+        const fail = (status: number, key: string) => {
+          res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' })
+          res.end(renderLogin(key, true))
+        }
+        if (!checkSetupCode((params.get('setup_code') || '').trim())) {
+          log('warn', `Bad setup code from ${req.socket.remoteAddress}`)
+          return fail(401, 'setup.badCode')
+        }
+        let created
+        try {
+          created = createUser(username, password)
+        } catch {
+          return fail(400, 'setup.badInput')
+        }
+        clearSetupCode()
+        log('info', `First admin "${created.username}" created via setup code`)
+        res.writeHead(302, {
+          Location: '/dashboard',
+          'Set-Cookie': setCookieHeader(createSessionCookie(created.username), secure),
+        })
+        res.end()
+        return
+      }
+
       if (!username || !password) {
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(renderLogin('err.adminCreds'))
@@ -739,44 +867,20 @@ async function handleDashboardArea(
 
   if (pathname === '/_metrics') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify({ ...getMetricsSnapshot(), oauth: getOAuthStatus() }))
+    res.end(JSON.stringify({ ...getMetricsSnapshot(), accounts: listAccounts() }))
     return
   }
 
-  // ── OAuth re-login (authorization code + PKCE, manual paste flow) ──
-  // Lets an admin re-authenticate the gateway's upstream Claude account from
-  // the browser when the refresh_token dies, instead of editing config.yaml
-  // and restarting the container.
-  if (pathname === '/api/oauth') {
-    if (method !== 'GET') {
-      res.writeHead(405, { Allow: 'GET' })
-      res.end()
-      return
-    }
+  // ── Account management + per-account OAuth login (authorization code + PKCE,
+  // manual paste flow). Every login route names its account explicitly.
+  if (pathname === '/api/accounts' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify(getOAuthStatus()))
+    // defaultEmail lets the UI flag accounts still on the gateway's template identity.
+    res.end(JSON.stringify({ accounts: accountsWithUsage(), defaultEmail: config.identity.email || '' }))
     return
   }
 
-  if (pathname === '/api/oauth/login') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
-      res.end()
-      return
-    }
-    const started = beginOAuthLogin()
-    log('info', `User "${session.u}" started an OAuth re-login`)
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-    res.end(JSON.stringify(started))
-    return
-  }
-
-  if (pathname === '/api/oauth/complete') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
-      res.end()
-      return
-    }
+  if (pathname === '/api/accounts' && method === 'POST') {
     let body: Buffer
     try {
       body = await readBody(req)
@@ -785,60 +889,138 @@ async function handleDashboardArea(
       res.end(JSON.stringify({ error: 'Payload too large' }))
       return
     }
-    let code = ''
     try {
-      const parsed = JSON.parse(body.toString('utf-8'))
-      code = typeof parsed?.code === 'string' ? parsed.code : ''
-    } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Invalid JSON body' }))
-      return
-    }
-    if (!code.trim()) {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Authorization code is required' }))
-      return
-    }
-    try {
-      const result = await completeOAuthLogin(code)
-      log('info', `User "${session.u}" completed an OAuth re-login`)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, ...result, status: getOAuthStatus() }))
+      const input = JSON.parse(body.toString('utf-8')) as {
+        id?: string; label?: string; email?: string; proxyUrl?: string
+      }
+      if (!input.id) throw new Error('id is required')
+      const account = createAccount({
+        id: input.id,
+        label: input.label,
+        email: input.email || config.identity.email,
+        proxyUrl: typeof input.proxyUrl === 'string' ? input.proxyUrl.trim() : undefined,
+      })
+      log('info', `Account "${account.id}" created`)
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(account))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      log('warn', `OAuth re-login by "${session.u}" failed: ${message}`)
-      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.writeHead(message.includes('already exists') ? 409 : 400, {
+        'Content-Type': 'application/json',
+      })
       res.end(JSON.stringify({ error: message }))
     }
     return
   }
 
-  if (pathname === '/api/oauth/cancel') {
-    if (method !== 'POST') {
-      res.writeHead(405, { Allow: 'POST' })
+  if (pathname.startsWith('/api/accounts/')) {
+    const rest = pathname.slice('/api/accounts/'.length)
+    const [id, action] = rest.split('/')
+    if (!id) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Not found' }))
+      return
+    }
+    if (!getAccountView(id)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: `No such account: ${id}` }))
+      return
+    }
+
+    const fail = (status: number, err: unknown) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+    }
+
+    if (!action && method === 'PATCH') {
+      let body: Buffer
+      try {
+        body = await readBody(req)
+      } catch {
+        return fail(413, new Error('Payload too large'))
+      }
+      try {
+        const patch = sanitizeAccountPatch(JSON.parse(body.toString('utf-8')))
+        // Before writeHead: updateAccount throws on validation (e.g. a bad proxyUrl),
+        // and fail() can't send a 400 once the 200 headers are out.
+        const updated = updateAccount(id, patch)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(updated))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (!action && method === 'DELETE') {
+      try {
+        deleteAccount(id)
+        log('info', `Account "${id}" deleted`)
+        res.writeHead(204)
+        res.end()
+      } catch (err) {
+        // still bound to clients
+        fail(409, err)
+      }
+      return
+    }
+
+    if (action === 'login' && method === 'POST') {
+      try {
+        const started = beginLogin(id)
+        log('info', `User "${session.u}" started an OAuth login for account "${id}"`)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify(started))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (action === 'complete' && method === 'POST') {
+      let body: Buffer
+      try {
+        body = await readBody(req)
+      } catch {
+        return fail(413, new Error('Payload too large'))
+      }
+      try {
+        const { code } = JSON.parse(body.toString('utf-8')) as { code?: string }
+        if (!code || !code.trim()) throw new Error('code is required')
+        const done = await completeLogin(id, code)
+        log('info', `User "${session.u}" completed an OAuth login for account "${id}"`)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, ...done, accounts: accountsWithUsage() }))
+      } catch (err) {
+        fail(400, err)
+      }
+      return
+    }
+
+    if (action === 'cancel' && method === 'POST') {
+      cancelLogin(id)
+      res.writeHead(204)
       res.end()
       return
     }
-    cancelOAuthLogin()
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
+
+    res.writeHead(405, { Allow: 'PATCH, DELETE, POST' })
+    res.end()
     return
   }
 
   if (pathname === '/api/clients') {
     if (method === 'GET') {
-      const clients = listClients().map((c) => {
-        const since = periodStart(c.cost_limit_period)
-        const used = c.cost_limit_usd ? getClientCostSince(c.name, since) : 0
-        return {
-          name: c.name,
-          token_preview: c.token.slice(0, 8) + '…' + c.token.slice(-4),
-          cost_limit_usd: c.cost_limit_usd ?? null,
-          cost_limit_period: c.cost_limit_period ?? null,
-          cost_used_usd: c.cost_limit_usd ? Number(used.toFixed(4)) : null,
-          home_dir: c.home_dir ?? null,
-        }
-      })
+      // Limits live on (client, account) bindings now; see /api/clients/:name/accounts.
+      const clients = listClients().map((c) => ({
+        name: c.name,
+        token_preview: c.token.slice(0, 8) + '…' + c.token.slice(-4),
+        home_dir: c.home_dir ?? null,
+        bindings: listBindings(c.name).map((b) => ({
+          ...b,
+          usedUsd: getClientAccountCostSince(c.name, b.accountId, periodStart(b.limitPeriod)),
+        })),
+      }))
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ clients }))
       return
@@ -858,8 +1040,6 @@ async function handleDashboardArea(
         scheme?: string
         format?: string
         platform?: string
-        cost_limit_usd?: number | null
-        cost_limit_period?: CostLimitPeriod | null
       }
       try {
         payload = JSON.parse(body.toString('utf-8'))
@@ -880,16 +1060,12 @@ async function handleDashboardArea(
       }
       let entry
       try {
-        entry = addClient(name, {
-          cost_limit_usd: payload.cost_limit_usd ?? undefined,
-          cost_limit_period: payload.cost_limit_period ?? undefined,
-        })
+        entry = addClient(name)
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadAuthFromConfig()
       // Generate a one-time portal password the admin hands to the client.
       let portalPassword = ''
       try {
@@ -931,6 +1107,79 @@ async function handleDashboardArea(
 
   if (pathname.startsWith('/api/clients/')) {
     const rest = pathname.slice('/api/clients/'.length)
+
+    // GET/PUT /api/clients/:name/accounts — the client's account bindings
+    // (priority + per-account limit). PUT replaces the whole set.
+    if (rest.endsWith('/accounts')) {
+      const clientName = decodeURIComponent(rest.slice(0, -'/accounts'.length))
+      if (!listClients().some((c) => c.name === clientName)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `No such client: ${clientName}` }))
+        return
+      }
+
+      if (method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify({ bindings: listBindings(clientName) }))
+        return
+      }
+
+      if (method === 'PUT') {
+        let body: Buffer
+        try {
+          body = await readBody(req)
+        } catch {
+          res.writeHead(413, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Payload too large' }))
+          return
+        }
+        try {
+          const parsed = JSON.parse(body.toString('utf-8')) as {
+            bindings?: Array<{
+              account_id?: string; priority?: number
+              limit_usd?: number; limit_period?: string
+            }>
+          }
+          const rows = (parsed.bindings || []).map((b, index) => {
+            if (!b.account_id) throw new Error('account_id is required on every binding')
+            if (!getAccountRow(b.account_id)) {
+              throw new Error(`No such account: ${b.account_id}`)
+            }
+            const period = b.limit_period || 'lifetime'
+            if (!['lifetime', 'monthly', 'daily'].includes(period)) {
+              throw new Error(`Invalid limit_period: ${period}`)
+            }
+            const limit = Number(b.limit_usd ?? 0)
+            if (!Number.isFinite(limit) || limit < 0) {
+              throw new Error(`Invalid limit_usd: ${b.limit_usd}`)
+            }
+            const priority = Number(b.priority ?? index)
+            if (!Number.isFinite(priority)) throw new Error(`Invalid priority: ${b.priority}`)
+            return {
+              accountId: b.account_id,
+              priority,
+              limitUsd: limit,
+              limitPeriod: period as LimitPeriod,
+            }
+          })
+          if (new Set(rows.map((r) => r.accountId)).size !== rows.length) {
+            throw new Error('An account may appear at most once per client')
+          }
+          replaceBindings(clientName, rows)
+          log('info', `Client "${clientName}" bound to ${rows.length} account(s)`)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ bindings: listBindings(clientName) }))
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+        }
+        return
+      }
+
+      res.writeHead(405, { Allow: 'GET, PUT' })
+      res.end()
+      return
+    }
 
     // GET /api/clients/:name/launcher — re-download launcher for an existing
     // client (reuses token from config.yaml — does not rotate it).
@@ -1017,7 +1266,6 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'not found' }))
         return
       }
-      reloadAuthFromConfig()
       removeClientPassword(name)
       removeClientProfile(name)
       log('info', `User "${session.u}" removed client "${name}"`)
@@ -1034,11 +1282,7 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Payload too large' }))
         return
       }
-      let payload: {
-        cost_limit_usd?: number | null
-        cost_limit_period?: CostLimitPeriod | null
-        home_dir?: string | null
-      }
+      let payload: { home_dir?: string | null }
       try {
         payload = JSON.parse(body.toString('utf-8'))
       } catch {
@@ -1046,18 +1290,10 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: 'Invalid JSON' }))
         return
       }
-      // Cost-limit and workdir edits arrive as independent PATCHes; apply whatever
-      // keys are present so one call can't clobber the other.
       let updated
       try {
         if ('home_dir' in payload) {
           updated = setClientHomeDir(name, payload.home_dir ?? null)
-        }
-        if ('cost_limit_usd' in payload || 'cost_limit_period' in payload) {
-          updated = setClientLimit(name, {
-            cost_limit_usd: payload.cost_limit_usd ?? null,
-            cost_limit_period: payload.cost_limit_period ?? null,
-          })
         }
         if (!updated) {
           updated = listClients().find((c) => c.name === name)
@@ -1068,13 +1304,10 @@ async function handleDashboardArea(
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'failed' }))
         return
       }
-      reloadAuthFromConfig()
       log('info', `User "${session.u}" updated client "${name}"`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         name: updated.name,
-        cost_limit_usd: updated.cost_limit_usd ?? null,
-        cost_limit_period: updated.cost_limit_period ?? null,
         home_dir: updated.home_dir ?? null,
       }))
       return
@@ -1240,11 +1473,24 @@ async function handlePortalArea(
   // Usage + credit + profile JSON for this client only.
   if (pathname === '/portal/me') {
     const stats = getClientStats(client.name)
-    const limit = client.cost_limit_usd ?? null
-    const period = client.cost_limit_period ?? 'lifetime'
-    const used = getClientCostSince(client.name, periodStart(client.cost_limit_period))
     const profile = getClientProfile(client.name)
     const credMeta = getClientCredentialMeta(client.name)
+    // Client-wide credit, summed per limit period. Account ids are never sent:
+    // a client sees its total, not which upstream account it spends on. Any
+    // unlimited binding makes its period unlimited (limit_usd 0).
+    const byPeriod = new Map<string, { period: string; used_usd: number; limit_usd: number; unlimited: boolean }>()
+    for (const b of listBindings(client.name)) {
+      const c = byPeriod.get(b.limitPeriod) ?? { period: b.limitPeriod, used_usd: 0, limit_usd: 0, unlimited: false }
+      c.used_usd += getClientAccountCostSince(client.name, b.accountId, periodStart(b.limitPeriod))
+      if (b.limitUsd > 0) c.limit_usd += b.limitUsd
+      else c.unlimited = true
+      byPeriod.set(b.limitPeriod, c)
+    }
+    const credit = [...byPeriod.values()].map((c) => ({
+      period: c.period,
+      used_usd: Number(c.used_usd.toFixed(4)),
+      limit_usd: c.unlimited ? 0 : c.limit_usd,
+    }))
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     res.end(JSON.stringify({
       name: client.name,
@@ -1255,15 +1501,8 @@ async function handlePortalArea(
       account: {
         created_at: credMeta?.created_at ?? null,
         password_updated_at: credMeta?.updated_at ?? null,
-        cost_limit_usd: limit,
-        cost_limit_period: period,
       },
-      credit: {
-        limit_usd: limit,
-        period,
-        used_usd: Number(used.toFixed(4)),
-        remaining_usd: limit != null ? Number(Math.max(0, limit - used).toFixed(4)) : null,
-      },
+      credit,
       lifetime: stats.lifetime,
       periods: stats.periods,
       models: getClientModels(client.name),
@@ -1306,7 +1545,7 @@ async function handlePortalArea(
       // back to their machine. Same writer the admin uses.
       if ('home_dir' in payload) {
         homeDir = setClientHomeDir(client.name, payload.home_dir ?? null).home_dir ?? null
-        reloadAuthFromConfig()
+        reloadClients()
       }
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' })

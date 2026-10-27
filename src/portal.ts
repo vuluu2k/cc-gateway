@@ -4,6 +4,7 @@
 // their launcher. Everything is scoped to the one authenticated client.
 
 import { i18nHead, langSwitcher, icon } from './i18n.js'
+import { glassCss } from './glass.js'
 
 const SHARED_HEAD_STYLE = `
   :root {
@@ -62,6 +63,8 @@ ${SHARED_HEAD_STYLE}
   input:focus { outline: none; border-color: var(--accent); }
   button[type=submit] { margin-top: 22px; width: 100%; padding: 10px; font-size: 14px; font-weight: 500; }
   .back { display: block; text-align: center; margin-top: 16px; font-size: 12px; color: var(--muted); }
+  ${glassCss('.box')}
+  .box { border-radius: 14px; }
 </style>
 </head>
 <body>
@@ -130,13 +133,11 @@ ${SHARED_HEAD_STYLE}
   .card h3 { margin: 0 0 12px; font-size: 13px; }
   .stat .value { font-size: 22px; font-weight: 600; font-family: var(--mono); }
   .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 4px; letter-spacing: .03em; }
-  .credit-card { background: linear-gradient(135deg, #11161d, #1a2230); }
-  .credit-big { font-size: 36px; font-weight: 700; font-family: var(--mono); }
-  .credit-sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meter { height: 10px; background: var(--panel-2); border-radius: 6px; overflow: hidden; margin: 16px 0 6px; }
   .meter > span { display: block; height: 100%; background: var(--ok); width: 0; transition: width .3s; }
   .meter > span.warn { background: var(--warn); }
   .meter > span.err { background: var(--err); }
+  .credit-big { font-size: 32px; font-weight: 700; font-family: var(--mono); }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -180,6 +181,9 @@ ${SHARED_HEAD_STYLE}
     nav.tabs { top: 60px; }
     main { padding: 16px 14px; }
   }
+  ${glassCss('header, nav.tabs, .card')}
+  .card { border-radius: 14px; }
+  nav.tabs { box-shadow: none; }
 </style>
 </head>
 <body>
@@ -208,12 +212,10 @@ ${SHARED_HEAD_STYLE}
   <section id="overview" class="block">
     <h2 class="section-title" data-i18n="portal.sec.overview">Overview</h2>
     <div class="grid">
-      <div class="card credit-card">
+      <div id="loadErr" class="error" style="display:none"></div>
+      <div class="card">
         <h3 data-i18n="portal.credit.h">Your credit</h3>
-        <div id="creditBig" class="credit-big">…</div>
-        <div id="creditSub" class="credit-sub"></div>
-        <div class="meter" id="creditMeterWrap"><span id="creditMeter"></span></div>
-        <div id="creditUsed" class="muted" style="font-size:12px"></div>
+        <div id="creditBody"></div>
       </div>
       <div class="row" id="lifetimeStats"></div>
     </div>
@@ -240,7 +242,6 @@ ${SHARED_HEAD_STYLE}
         <h3 data-i18n="portal.account.h">Account</h3>
         <div class="kv">
           <div class="k" data-i18n="portal.account.name">Client name</div><div class="v" id="acName">—</div>
-          <div class="k" data-i18n="portal.account.plan">Plan / limit</div><div class="v" id="acPlan">—</div>
           <div class="k" data-i18n="portal.account.since">Member since</div><div class="v" id="acSince">—</div>
           <div class="k" data-i18n="portal.account.pwSet">Password set</div><div class="v" id="acPwUpdated">—</div>
         </div>
@@ -409,27 +410,7 @@ ${SHARED_HEAD_STYLE}
     document.getElementById('headerSub').textContent = '@' + d.name;
     document.getElementById('avatar').textContent = (display[0] || '?').toUpperCase();
 
-    // Credit
-    const c = d.credit;
-    const big = document.getElementById('creditBig');
-    const sub = document.getElementById('creditSub');
-    const meterWrap = document.getElementById('creditMeterWrap');
-    const meter = document.getElementById('creditMeter');
-    const used = document.getElementById('creditUsed');
-    if (c.limit_usd == null) {
-      big.textContent = t('portal.credit.unlimited');
-      sub.textContent = t('portal.credit.noLimit');
-      meterWrap.style.display = 'none';
-      used.textContent = t('portal.credit.usedSoFar', { used: fmtCost(c.used_usd) });
-    } else {
-      meterWrap.style.display = '';
-      big.textContent = fmtCost(c.remaining_usd) + t('portal.credit.leftSuffix');
-      sub.textContent = t('portal.credit.ofCredit', { limit: fmtCost(c.limit_usd), period: periodLabel(c.period) });
-      const pct = c.limit_usd > 0 ? Math.min(100, (c.used_usd / c.limit_usd) * 100) : 0;
-      meter.style.width = pct + '%';
-      meter.className = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
-      used.textContent = t('portal.credit.usedOf', { used: fmtCost(c.used_usd), limit: fmtCost(c.limit_usd), pct: pct.toFixed(0) });
-    }
+    document.getElementById('loadErr').style.display = 'none';
 
     // Lifetime stats
     const lt = d.lifetime;
@@ -444,10 +425,24 @@ ${SHARED_HEAD_STYLE}
 
     // Account
     const a = d.account || {};
+    const credit = d.credit || [];
     document.getElementById('acName').textContent = d.name;
-    document.getElementById('acPlan').textContent = a.cost_limit_usd == null
-      ? t('portal.credit.unlimited')
-      : fmtCost(a.cost_limit_usd) + ' / ' + periodLabel(a.cost_limit_period || 'lifetime');
+    // Totals per limit period only; which upstream account is used stays hidden.
+    document.getElementById('creditBody').innerHTML = credit.length
+      ? credit.map((c) => {
+          if (!(c.limit_usd > 0)) {
+            return '<div class="credit-big">' + esc(t('portal.credit.unlimited')) + '</div>'
+              + '<div class="muted">' + esc(t('portal.used')) + ' ' + fmtCost(c.used_usd) + ' · ' + esc(periodLabel(c.period)) + '</div>';
+          }
+          const pct = Math.min(100, Math.round((c.used_usd / c.limit_usd) * 100));
+          const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
+          return '<div class="credit-big">' + fmtCost(Math.max(0, c.limit_usd - c.used_usd))
+            + ' <span class="muted" style="font-size:14px">' + esc(t('portal.credit.left')) + '</span></div>'
+            + '<div class="meter"><span class="' + cls + '" style="width:' + pct + '%"></span></div>'
+            + '<div class="muted" style="font-size:12px">' + esc(t('portal.used')) + ' ' + fmtCost(c.used_usd)
+            + ' / ' + fmtCost(c.limit_usd) + ' (' + pct + '%) · ' + esc(periodLabel(c.period)) + '</div>';
+        }).join('<div style="height:14px"></div>')
+      : '<span class="muted">' + esc(t('portal.account.noQuota')) + '</span>';
     document.getElementById('acSince').textContent = fmtDate(a.created_at);
     document.getElementById('acPwUpdated').textContent = fmtDate(a.password_updated_at);
 
@@ -668,9 +663,15 @@ ${SHARED_HEAD_STYLE}
   const load = () => fetch('/portal/me', { headers: { 'Accept': 'application/json' } })
     .then(r => { if (r.status === 401) { window.location.href = '/portal'; return null; } return r.json(); })
     .then(d => { if (d) render(d); })
-    .catch(() => { document.getElementById('creditBig').textContent = t('portal.msg.loadErr'); });
+    .catch(() => {
+      const el = document.getElementById('loadErr');
+      el.textContent = t('portal.msg.loadErr');
+      el.style.display = 'block';
+    });
   load();
-  setInterval(load, 30000);
+  // Skip polls while the tab is hidden; catch up as soon as it is shown again.
+  setInterval(() => { if (!document.hidden) load(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 })();
 </script>
 </body>

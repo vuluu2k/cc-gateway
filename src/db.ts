@@ -64,6 +64,49 @@ function migrate(db: Database.Database) {
       updated_at INTEGER NOT NULL
     );
 
+    -- Upstream Claude accounts. Each carries its own spoofed identity so the
+    -- API sees N independent machines, not one machine juggling N logins.
+    CREATE TABLE IF NOT EXISTS accounts (
+      id              TEXT PRIMARY KEY,
+      label           TEXT    NOT NULL DEFAULT '',
+      refresh_token   TEXT    NOT NULL DEFAULT '',
+      access_token    TEXT    NOT NULL DEFAULT '',
+      expires_at      INTEGER NOT NULL DEFAULT 0,
+      state           TEXT    NOT NULL DEFAULT 'uninitialized',
+      last_error      TEXT    NOT NULL DEFAULT '',
+      last_refresh_at INTEGER NOT NULL DEFAULT 0,
+      device_id       TEXT    NOT NULL,
+      email           TEXT    NOT NULL DEFAULT '',
+      env_json        TEXT    NOT NULL DEFAULT '',
+      prompt_env_json TEXT    NOT NULL DEFAULT '',
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      proxy_url       TEXT    NOT NULL DEFAULT '',
+      created_at      INTEGER NOT NULL
+    );
+
+    -- Proxy clients. Moved out of config.yaml's auth.tokens so the dashboard
+    -- can manage them without rewriting YAML on every change.
+    CREATE TABLE IF NOT EXISTS clients (
+      name       TEXT PRIMARY KEY,
+      token      TEXT NOT NULL UNIQUE,
+      home_dir   TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+
+    -- Which accounts a client may spend against, in what order, up to how much.
+    -- Lower priority wins. limit_usd = 0 means unlimited.
+    CREATE TABLE IF NOT EXISTS client_accounts (
+      client_name  TEXT    NOT NULL REFERENCES clients(name) ON DELETE CASCADE,
+      account_id   TEXT    NOT NULL REFERENCES accounts(id)  ON DELETE CASCADE,
+      priority     INTEGER NOT NULL DEFAULT 0,
+      limit_usd    REAL    NOT NULL DEFAULT 0,
+      limit_period TEXT    NOT NULL DEFAULT 'lifetime',
+      PRIMARY KEY (client_name, account_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ca_client_priority
+      ON client_accounts(client_name, priority);
+
     CREATE INDEX IF NOT EXISTS idx_rm_ts ON request_metrics(ts);
     CREATE INDEX IF NOT EXISTS idx_rm_client_ts ON request_metrics(client, ts);
   `)
@@ -87,7 +130,22 @@ function migrate(db: Database.Database) {
   if (!has('error_source')) addCol("error_source TEXT NOT NULL DEFAULT ''")
   if (!has('error_detail')) addCol("error_detail TEXT NOT NULL DEFAULT ''")
 
+  // ── 2026-09 schema bump: multi-account attribution ──
+  if (!has('account_id')) addCol("account_id TEXT NOT NULL DEFAULT ''")
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_rm_client_acct_ts ON request_metrics(client, account_id, ts)',
+  )
+
+  // Covering index for the per-account usage totals on the Accounts list.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_rm_account_cost ON request_metrics(account_id, cost_usd)')
+
   db.exec('CREATE INDEX IF NOT EXISTS idx_rm_model_ts ON request_metrics(model, ts)')
+
+  // ── Optional per-account outbound proxy ──
+  const acctCols = db.prepare('PRAGMA table_info(accounts)').all() as Array<{ name: string }>
+  if (!acctCols.some((c) => c.name === 'proxy_url')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN proxy_url TEXT NOT NULL DEFAULT ''")
+  }
 }
 
 export function getOrCreateMeta(key: string, factory: () => string): string {

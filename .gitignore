@@ -6,3 +6,4 @@ config.yaml
 certs/
 clients/
 .omc/
+data/

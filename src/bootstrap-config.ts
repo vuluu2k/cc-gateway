@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { randomBytes } from 'crypto'
+import type { Config } from './config.js'
+import { insertAccountRow } from './accounts-store.js'
+import { accountSeedingClosed, markAccountsSeeded } from './migrate-accounts.js'
 import { parseDocument, YAMLMap } from 'yaml'
 import { log } from './logger.js'
 
@@ -55,7 +58,7 @@ function gatherSeedCredentials(): ClaudeCredentials | null {
   return null
 }
 
-function buildConfigYaml(creds: ClaudeCredentials, opts: {
+function buildConfigYaml(creds: ClaudeCredentials | null, opts: {
   clientName: string
   clientToken: string
   deviceId: string
@@ -68,12 +71,12 @@ function buildConfigYaml(creds: ClaudeCredentials, opts: {
 
 upstream:
   url: https://api.anthropic.com
-
+${creds?.refreshToken ? `
 oauth:
   access_token: "${creds.accessToken || ''}"
   refresh_token: "${creds.refreshToken}"
   expires_at: ${creds.expiresAt || 0}
-
+` : ''}
 auth:
   tokens:
     - name: ${clientName}
@@ -134,11 +137,12 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
   log('info', `No config found at ${absPath} — attempting auto-bootstrap`)
 
   const creds = gatherSeedCredentials()
-  if (!creds || !creds.refreshToken) {
-    log('error', 'Cannot bootstrap config: no OAuth credentials available.')
-    log('error', '  Set CCG_REFRESH_TOKEN env var, or mount a credentials.json at')
-    log('error', '  CCG_CREDENTIALS_PATH (or /app/data/claude-credentials.json).')
-    return false
+  // No credentials is no longer fatal. The gateway boots empty and the admin
+  // adds the first account from the dashboard — that is the whole point of the
+  // docker-only setup path.
+  if (!creds) {
+    log('info', 'No seed credentials found — starting with an empty account list.')
+    log('info', '  Add the first account from the admin dashboard once it is up.')
   }
 
   const dbPath = resolve(dirname(absPath), 'ccg.db')
@@ -158,22 +162,28 @@ export function bootstrapConfigIfMissing(configPath: string): boolean {
     // chmod may fail on some mounted filesystems — non-fatal
   }
 
-  log('info', `Generated ${absPath} (seed client + fresh device_id)`)
+  log('info', `Generated ${absPath} (fresh device_id)`)
   log('info', '  Edit identity/env/prompt_env if you need a specific fingerprint.')
   return true
 }
 
 /**
- * Persist a refreshed OAuth token bundle into config.yaml's `oauth:` section.
- * Round-trips through parseDocument so user edits / comments are preserved.
+ * Write an OAuth token bundle into config.yaml's `oauth:` section. Round-trips
+ * through parseDocument so user edits / comments are preserved.
+ *
+ * Not exported: the gateway no longer treats config.yaml's `oauth:` block as
+ * live runtime state (accounts.ts + SQLite do), so the only remaining writer
+ * is syncOAuthFromCredentialsIfChanged below, keeping the seed fresh for the
+ * one-time accounts migration (migrate-accounts.ts). Once that has run, this
+ * block is never read again.
  */
-export function updateConfigOAuth(
+function writeConfigOAuth(
   configPath: string,
   next: { accessToken: string; refreshToken: string; expiresAt: number },
 ): void {
   const absPath = resolve(configPath)
   if (!existsSync(absPath)) {
-    log('warn', `updateConfigOAuth: ${absPath} does not exist, skipping persist`)
+    log('warn', `writeConfigOAuth: ${absPath} does not exist, skipping persist`)
     return
   }
   try {
@@ -189,7 +199,7 @@ export function updateConfigOAuth(
     oauth.set('expires_at', next.expiresAt)
     writeFileSync(absPath, doc.toString(), 'utf-8')
   } catch (err) {
-    log('error', `updateConfigOAuth failed: ${err instanceof Error ? err.message : err}`)
+    log('error', `writeConfigOAuth failed: ${err instanceof Error ? err.message : err}`)
   }
 }
 
@@ -226,10 +236,10 @@ export function updateConfigEnvVersion(configPath: string, version: string): voi
  * the case where the host re-logged in to Claude and rotated the refresh token.
  *
  * Only syncs when the mounted credentials are actually newer than config.yaml.
- * The gateway rotates refresh_tokens at runtime and persists them back to
- * config.yaml, so a mounted credentials.json from a past `claude login` will
- * usually be STALE relative to config.yaml — overwriting blindly would replay
- * a consumed refresh_token and brick auth on every restart.
+ * It only matters before the one-time accounts migration: afterwards tokens
+ * live (and rotate) in the database and config.yaml's oauth block is ignored.
+ * A mounted credentials.json from a past `claude login` can be STALE relative
+ * to config.yaml — overwriting blindly would import a consumed refresh_token.
  */
 export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
   const absPath = resolve(configPath)
@@ -267,9 +277,36 @@ export function syncOAuthFromCredentialsIfChanged(configPath: string): void {
   }
 
   log('info', 'Mounted credentials are newer than config.yaml — syncing refresh_token')
-  updateConfigOAuth(absPath, {
+  writeConfigOAuth(absPath, {
     accessToken: creds.accessToken || '',
     refreshToken: creds.refreshToken,
     expiresAt: credsExpiresAt,
   })
+}
+
+/**
+ * Create the first account from CCG_REFRESH_TOKEN or a mounted credentials.json.
+ *
+ * Optional convenience: it saves a browser login on a fresh server. Skipped
+ * once this database has ever held an account (including right after the
+ * config.yaml migration), so deleting every account does not resurrect it.
+ */
+export function seedAccountFromEnvIfEmpty(config: Config): boolean {
+  if (accountSeedingClosed()) return false
+
+  const creds = gatherSeedCredentials()
+  if (!creds?.refreshToken) return false
+
+  insertAccountRow({
+    id: 'default',
+    label: 'Seeded',
+    refreshToken: creds.refreshToken,
+    accessToken: creds.accessToken || '',
+    expiresAt: creds.expiresAt || 0,
+    deviceId: config.identity?.device_id,
+    email: config.identity?.email || '',
+  })
+  markAccountsSeeded()
+  log('info', 'Seeded account "default" from environment credentials')
+  return true
 }

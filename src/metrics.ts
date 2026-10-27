@@ -1,6 +1,6 @@
 import { getDb } from './db.js'
 import { stripSyntheticBlocks } from './preview.js'
-import { getRateLimitSnapshot } from './ratelimit.js'
+import { getRateLimitSnapshots } from './ratelimit.js'
 
 const MINUTE_MS = 60_000
 const HOUR_MS = 3_600_000
@@ -12,6 +12,9 @@ const RECENT_LIMIT = 50
 export interface RequestRecord {
   ts: number
   client: string
+  // Which upstream account paid for this request. Empty only for requests
+  // rejected before an account was picked.
+  accountId?: string
   method: string
   path: string
   status: number
@@ -55,14 +58,14 @@ export function recordRequest(rec: RequestRecord) {
     getDb()
       .prepare(
         `INSERT INTO request_metrics (
-          ts, client, method, path, status, duration_ms,
+          ts, client, account_id, method, path, status, duration_ms,
           model, input_tokens, output_tokens,
           cache_read_tokens, cache_creation_tokens, cost_usd,
           user_message, error_source, error_detail
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        rec.ts, rec.client, rec.method, rec.path, rec.status, rec.durationMs,
+        rec.ts, rec.client, rec.accountId || '', rec.method, rec.path, rec.status, rec.durationMs,
         rec.model || '',
         rec.inputTokens || 0,
         rec.outputTokens || 0,
@@ -93,6 +96,39 @@ export function getClientCostSince(client: string, sinceTs: number): number {
   } catch {
     return 0
   }
+}
+
+/**
+ * Sum of cost_usd for one (client, account) pair since the given timestamp.
+ * This is what the per-binding quota is measured against — a client's spend on
+ * account A must not count toward its limit on account B.
+ */
+export function getClientAccountCostSince(
+  client: string,
+  accountId: string,
+  sinceTs: number,
+): number {
+  try {
+    const row = getDb()
+      .prepare(
+        'SELECT SUM(cost_usd) as cost FROM request_metrics WHERE client = ? AND account_id = ? AND ts >= ?',
+      )
+      .get(client, accountId, sinceTs) as { cost: number | null }
+    return row?.cost || 0
+  } catch {
+    return 0
+  }
+}
+
+/** Lifetime spend and request count per account id (covered by idx_rm_account_cost). */
+export function getAccountUsageTotals(): Record<string, { costUsd: number; requests: number }> {
+  const rows = getDb()
+    .prepare(
+      `SELECT account_id, SUM(cost_usd) AS cost, COUNT(*) AS n
+       FROM request_metrics WHERE account_id != '' GROUP BY account_id`,
+    )
+    .all() as Array<{ account_id: string; cost: number | null; n: number }>
+  return Object.fromEntries(rows.map((r) => [r.account_id, { costUsd: r.cost || 0, requests: r.n }]))
 }
 
 /**
@@ -461,52 +497,54 @@ export function getMetricsSnapshot() {
 
   const minuteRows = db
     .prepare(
-      `SELECT client, (ts / ${MINUTE_MS}) * ${MINUTE_MS} as bucket, COUNT(*) as count
+      `SELECT client, (ts / ${MINUTE_MS}) * ${MINUTE_MS} as bucket, COUNT(*) as count,
+         SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, SUM(cost_usd) as cost
        FROM request_metrics
        WHERE ts >= ?
        GROUP BY client, bucket`,
     )
-    .all(minuteStart) as Array<{ client: string; bucket: number; count: number }>
+    .all(minuteStart) as Array<{ client: string; bucket: number; count: number; errors: number; cost: number }>
 
   const hourRows = db
     .prepare(
-      `SELECT client, (ts / ${HOUR_MS}) * ${HOUR_MS} as bucket, COUNT(*) as count
+      `SELECT client, (ts / ${HOUR_MS}) * ${HOUR_MS} as bucket, COUNT(*) as count,
+         SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, SUM(cost_usd) as cost
        FROM request_metrics
        WHERE ts >= ?
        GROUP BY client, bucket`,
     )
-    .all(hourStart) as Array<{ client: string; bucket: number; count: number }>
+    .all(hourStart) as Array<{ client: string; bucket: number; count: number; errors: number; cost: number }>
 
-  const minuteSeries: Record<string, Array<{ ts: number; count: number }>> = {}
-  const hourSeries: Record<string, Array<{ ts: number; count: number }>> = {}
+  const minuteSeries: Record<string, Array<{ ts: number; count: number; errors: number; cost: number }>> = {}
+  const hourSeries: Record<string, Array<{ ts: number; count: number; errors: number; cost: number }>> = {}
 
   for (const c of clients) {
     minuteSeries[c.name] = []
     for (let i = MINUTES_KEPT - 1; i >= 0; i--) {
-      minuteSeries[c.name].push({ ts: currentMinute - i * MINUTE_MS, count: 0 })
+      minuteSeries[c.name].push({ ts: currentMinute - i * MINUTE_MS, count: 0, errors: 0, cost: 0 })
     }
     hourSeries[c.name] = []
     for (let i = HOURS_KEPT - 1; i >= 0; i--) {
-      hourSeries[c.name].push({ ts: currentHour - i * HOUR_MS, count: 0 })
+      hourSeries[c.name].push({ ts: currentHour - i * HOUR_MS, count: 0, errors: 0, cost: 0 })
     }
   }
   for (const r of minuteRows) {
     const series = minuteSeries[r.client]
     if (!series) continue
     const point = series.find((p) => p.ts === r.bucket)
-    if (point) point.count = r.count
+    if (point) Object.assign(point, { count: r.count, errors: r.errors || 0, cost: r.cost || 0 })
   }
   for (const r of hourRows) {
     const series = hourSeries[r.client]
     if (!series) continue
     const point = series.find((p) => p.ts === r.bucket)
-    if (point) point.count = r.count
+    if (point) Object.assign(point, { count: r.count, errors: r.errors || 0, cost: r.cost || 0 })
   }
 
   const recent = (db
     .prepare(
       `SELECT
-        ts, client, method, path, status,
+        ts, client, account_id as accountId, method, path, status,
         duration_ms as durationMs,
         model,
         input_tokens as inputTokens,
@@ -542,7 +580,8 @@ export function getMetricsSnapshot() {
       SUM(output_tokens) as output_tokens,
       SUM(cache_read_tokens) as cache_read_tokens,
       SUM(cache_creation_tokens) as cache_creation_tokens,
-      SUM(cost_usd) as cost_usd
+      SUM(cost_usd) as cost_usd,
+      SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors
     FROM request_metrics WHERE ts >= ?`,
   )
   const periodSummary = periods.map((p) => {
@@ -551,6 +590,7 @@ export function getMetricsSnapshot() {
       key: p.key,
       label: p.label,
       total: r.total || 0,
+      errors: r.errors || 0,
       inputTokens: r.input_tokens || 0,
       outputTokens: r.output_tokens || 0,
       cacheReadTokens: r.cache_read_tokens || 0,
@@ -559,12 +599,56 @@ export function getMetricsSnapshot() {
     }
   })
 
-  // Account-wide Claude subscription quota (5h + weekly) from the latest upstream
-  // response headers, plus the models exercised within the current 5h session
-  // window. sessionStart comes from the quota's 5h reset when available, else a
-  // plain "last 5 hours" fallback so the panel still works before any headers land.
-  const quota = getRateLimitSnapshot()
-  const sessionStart = quota?.sessionWindowStartMs ?? now - 5 * HOUR_MS
+  // Overview KPIs: last 24h vs the 24h before it, so tiles can show a trend.
+  const kpiStmt = db.prepare(
+    `SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
+      SUM(CASE WHEN status >= 400 AND error_source = 'upstream' THEN 1 ELSE 0 END) as upstream_errors,
+      SUM(CASE WHEN status >= 400 AND error_source = 'gateway' THEN 1 ELSE 0 END) as gateway_errors,
+      COUNT(DISTINCT client) as active_clients,
+      SUM(input_tokens) as input_tokens,
+      SUM(cache_read_tokens) as cache_read_tokens,
+      SUM(cache_creation_tokens) as cache_creation_tokens,
+      SUM(cost_usd) as cost_usd
+    FROM request_metrics WHERE ts >= ? AND ts < ?`,
+  )
+  const kpiWindow = (from: number, to: number) => {
+    const r = kpiStmt.get(from, to) as any
+    return {
+      total: r.total || 0,
+      errors: r.errors || 0,
+      upstreamErrors: r.upstream_errors || 0,
+      gatewayErrors: r.gateway_errors || 0,
+      activeClients: r.active_clients || 0,
+      inputTokens: r.input_tokens || 0,
+      cacheReadTokens: r.cache_read_tokens || 0,
+      cacheCreationTokens: r.cache_creation_tokens || 0,
+      costUsd: r.cost_usd || 0,
+    }
+  }
+  const topSpender = db
+    .prepare(
+      `SELECT client, SUM(cost_usd) as cost_usd FROM request_metrics
+       WHERE ts >= ? GROUP BY client HAVING cost_usd > 0 ORDER BY cost_usd DESC LIMIT 1`,
+    )
+    .get(now - day) as { client: string; cost_usd: number } | undefined
+  const kpis = {
+    last24h: kpiWindow(now - day, now + 1),
+    prev24h: kpiWindow(now - 2 * day, now - day),
+    topSpender: topSpender ? { client: topSpender.client, costUsd: topSpender.cost_usd } : null,
+  }
+
+  // Claude subscription quota (5h + weekly) per upstream account, from each
+  // account's latest response headers, plus the models exercised within the
+  // current 5h session window. sessionStart is the earliest 5h window start
+  // across accounts (so every account's session is covered), else a plain
+  // "last 5 hours" fallback so the panel still works before any headers land.
+  const quotas = getRateLimitSnapshots()
+  const starts = Object.values(quotas)
+    .map((q) => q.sessionWindowStartMs)
+    .filter((v): v is number => v != null)
+  const sessionStart = starts.length ? Math.min(...starts) : now - 5 * HOUR_MS
   const sessionModels = getSessionModels(sessionStart)
 
   return {
@@ -572,12 +656,13 @@ export function getMetricsSnapshot() {
     uptimeMs: now - startedAt,
     totals,
     periods: periodSummary,
+    kpis,
     clients,
     models,
     minuteSeries,
     hourSeries,
     recent,
-    quota,
+    quotas,
     sessionStart,
     sessionModels,
   }

@@ -2,16 +2,17 @@ import { watchFile } from 'fs'
 import { resolve } from 'path'
 import { loadConfig } from './config.js'
 import { setLogLevel, log } from './logger.js'
-import { initOAuth, setOnTokensUpdated } from './oauth.js'
+import { initAccounts } from './accounts.js'
 import { startProxy } from './proxy.js'
-import { initAuth } from './auth.js'
 import { initDb } from './db.js'
 import { initMetrics } from './metrics.js'
-import { countUsers } from './users.js'
+import { currentSetupCode } from './users.js'
+import { migrateFromConfig } from './migrate-accounts.js'
+import { reloadClients } from './auth.js'
 import {
   bootstrapConfigIfMissing,
   syncOAuthFromCredentialsIfChanged,
-  updateConfigOAuth,
+  seedAccountFromEnvIfEmpty,
 } from './bootstrap-config.js'
 import { syncClaudeCodeVersion, startDailyVersionAutoUpdate } from './cc-version.js'
 
@@ -46,57 +47,62 @@ try {
     startDailyVersionAutoUpdate(configPath, config)
   }
 
-  // Whenever OAuth refreshes (immediately or on the schedule), persist the
-  // rotated refresh_token back to config.yaml so container restarts pick up
-  // the latest valid token instead of replaying a consumed one.
-  setOnTokensUpdated((tokens) => {
-    updateConfigOAuth(configPath, tokens)
-  })
-
   const dbPath = config.db?.path || './data/ccg.db'
   initDb(dbPath)
   initMetrics()
   log('info', `SQLite database: ${resolve(dbPath)}`)
-  if (countUsers() === 0) {
-    log('warn', 'No dashboard users yet. Create one with: npm run add-user <username>')
+
+  // Two seeding paths, both guarded on "this DB has never held an account"
+  // (accountSeedingClosed), so at most one of them ever runs, once:
+  //   1. an existing single-account config.yaml is imported, or
+  //   2. a fresh server is seeded from env/credentials.
+  // Neither is required — an empty gateway boots fine and is set up from the
+  // web — so a seeding failure is logged and boot carries on. Exiting here
+  // would crash-loop the container with the admin locked out of the dashboard.
+  for (const [name, seed] of [
+    ['config.yaml migration', () => migrateFromConfig(config)],
+    ['env account seed', () => seedAccountFromEnvIfEmpty(config)],
+  ] as const) {
+    try {
+      seed()
+    } catch (err) {
+      log('error', `${name} failed, continuing without it: ${err instanceof Error ? err.message : err}`)
+    }
   }
 
-  // Initialize OAuth — uses existing access token if valid, only refreshes when
-  // expired. A dead refresh_token must NOT abort startup: the admin needs the
-  // dashboard up in order to re-login, and /v1/* already answers 503 while the
-  // gateway has no usable token.
-  const oauthReady = await initOAuth(config.oauth)
-  if (!oauthReady) {
-    log('warn', 'Starting in degraded mode: no valid OAuth token.')
-    log('warn', '  Proxy requests will return 503 until you re-authenticate.')
-    log('warn', '  Open the admin dashboard and use "Re-login with Claude".')
+  reloadClients()
+  // Initialize every upstream account — each gets its own refresh timer. Never
+  // throws: a dead refresh_token parks THAT account in `expired` and leaves
+  // the others running, so the admin always has the dashboard to re-login.
+  await initAccounts()
+
+  const setupCode = currentSetupCode()
+  if (setupCode) {
+    log('warn', '─────────────────────────────────────────────')
+    log('warn', `First-time setup code: ${setupCode}`)
+    log('warn', '  Open https://<your-domain>/admin and use it to create the admin account.')
+    log('warn', '─────────────────────────────────────────────')
   }
 
   startProxy(config)
 
-  // Hot-reload auth.tokens + env.version on config changes (poll-based — works
-  // with bind mounts). The env.version sync lets an external cron / manual edit
-  // to config.yaml take effect live without restarting the gateway.
+  // Hot-reload env.version on config changes (poll-based — works with bind
+  // mounts). This lets an external cron / manual edit to config.yaml take
+  // effect live without restarting the gateway. Clients no longer live in
+  // config.yaml (they're DB rows — see src/auth.ts), so this poll only
+  // syncs env.version now.
   const watchPath = resolve(configPath)
-  let lastTokenSig = JSON.stringify(config.auth.tokens)
   watchFile(watchPath, { interval: 2000 }, () => {
     try {
       const next = loadConfig(configPath)
-
       const nextVersion = String(next.env.version || '')
       if (nextVersion && nextVersion !== String(config.env.version || '')) {
         config.env.version = nextVersion
         config.env.version_base = String(next.env.version_base || nextVersion)
         log('info', `Reloaded Claude Code version: ${nextVersion}`)
       }
-
-      const sig = JSON.stringify(next.auth.tokens)
-      if (sig === lastTokenSig) return
-      initAuth(next)
-      lastTokenSig = sig
-      log('info', `Reloaded auth.tokens (${next.auth.tokens.length} entries: ${next.auth.tokens.map(t => t.name).join(', ')})`)
     } catch (err) {
-      log('error', `Config reload failed, keeping existing tokens: ${err instanceof Error ? err.message : err}`)
+      log('error', `Config reload failed: ${err instanceof Error ? err.message : err}`)
     }
   })
 } catch (err) {

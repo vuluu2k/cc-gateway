@@ -1,6 +1,9 @@
 import { i18nHead, langSwitcher } from './i18n.js'
+import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
+import { renderBindingsModal, bindingsScript } from './dashboard-bindings.js'
+import { glassCss } from './glass.js'
 
-export function renderLogin(error?: string): string {
+export function renderLogin(error?: string, setup = false): string {
   const errBlock = error
     ? `<div class="error" data-i18n="${error}"></div>`
     : ''
@@ -22,7 +25,7 @@ ${i18nHead()}
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .box {
-    background: #14181d; border: 1px solid #232a33; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
     padding: 32px; width: 360px; max-width: 90vw;
   }
   h1 { font-size: 18px; margin: 0 0 6px; }
@@ -42,6 +45,7 @@ ${i18nHead()}
   }
   button:hover { background: #388bfd; }
   .error { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); color: #f85149; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+  ${glassCss('.box')}
 </style>
 </head>
 <body>
@@ -50,14 +54,16 @@ ${i18nHead()}
       <div class="brand">CC Gateway</div>
       ${langSwitcher('padding:6px 8px')}
     </div>
-    <h1 data-i18n="alogin.h1">CC Gateway · Admin</h1>
+    <h1 data-i18n="${setup ? 'setup.title' : 'alogin.h1'}">CC Gateway · Admin</h1>
     <p class="sub" data-i18n="alogin.sub">Sign in to access the dashboard</p>
     ${errBlock}
     <label for="username" data-i18n="alogin.username">Username</label>
     <input id="username" name="username" autocomplete="username" autofocus required />
     <label for="password" data-i18n="alogin.password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required />
-    <button type="submit" data-i18n="common.signin">Sign in</button>
+    <input id="password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required />
+    ${setup ? `<label for="setup_code" data-i18n="setup.code">Setup code</label>
+    <input id="setup_code" name="setup_code" autocomplete="off" required />` : ''}
+    <button type="submit" class="primary" data-i18n="${setup ? 'setup.submit' : 'common.signin'}">${setup ? 'Create admin' : 'Sign in'}</button>
     <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#8b949e">
       <span data-i18n="alogin.clientPrompt">Are you a client?</span> <a href="/portal" style="color:#58a6ff" data-i18n="alogin.openPortal">Open the client portal</a>
     </p>
@@ -272,11 +278,11 @@ ${i18nHead()}
 
     /* Action buttons in clientsConfig: wrap and size for touch */
     #clientsConfig td[data-label=""]:last-child {
-      display: flex; flex-wrap: wrap; gap: 8px;
       padding-top: 8px; margin-top: 6px;
       border-top: 1px solid var(--border);
     }
-    #clientsConfig td button { padding: 8px 12px; font-size: 13px; flex: 1 1 0; min-width: 0; }
+    #clientsConfig td div.actions { flex-wrap: wrap; gap: 8px; }
+    #clientsConfig td button { padding: 8px 12px; font-size: 13px; flex: 1 1 auto; }
 
     /* Recent message/path get full row width — no more truncation needed */
     .msg, .path { max-width: none; white-space: normal; word-break: break-word; }
@@ -331,7 +337,12 @@ ${i18nHead()}
     text-transform: uppercase; color: var(--muted); font-weight: 600;
   }
   .stat .value { font-size: 26px; font-weight: 600; font-family: var(--mono); }
-  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 4px; letter-spacing: .03em; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; letter-spacing: .03em; }
+  .stat .sub { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 900px) { #topStats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stat.warn .value { color: var(--warn); }
+  .stat.err .value { color: var(--err); }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -359,21 +370,34 @@ ${i18nHead()}
   .pill.ok { background: rgba(63,185,80,.15); color: var(--ok); }
   .pill.warn { background: rgba(210,153,34,.15); color: var(--warn); }
   .pill.err { background: rgba(248,81,73,.15); color: var(--err); }
-  .chart { display: flex; align-items: flex-end; gap: 1px; height: 70px; padding-top: 4px; }
-  .bar { flex: 1; background: var(--accent); opacity: .85; border-radius: 1px 1px 0 0; min-height: 1px; }
-  .bar:hover { opacity: 1; }
+  /* Traffic chart: one line per client, colour = client (validated dark categorical palette). */
+  .viz { position: relative; }
+  .viz-stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-bottom: 14px; }
+  .viz-stats > div { display: flex; flex-direction: column; gap: 2px; }
+  .viz-stats .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .viz-stats .v { font-family: var(--mono); font-size: 18px; font-weight: 600; }
+  .viz-stats .v small { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .viz svg { display: block; width: 100%; height: 220px; }
+  .viz .axis { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+  .viz .gridline { stroke: var(--border); }
+  .viz .cursor { stroke: var(--muted); stroke-dasharray: 3 3; opacity: 0; }
+  .viz .cursor.on { opacity: 1; }
+  .viz .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .viz .dot { stroke: #14181d; stroke-width: 2; }
+  .viz-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .viz-legend strong { color: var(--fg); font-family: var(--mono); font-weight: 500; margin-left: 4px; }
+  .viz-tip { position: absolute; top: 0; display: none; pointer-events: none; z-index: 5; min-width: 180px;
+    background: #161b22; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .viz-tip .h { color: var(--muted); margin-bottom: 6px; font-family: var(--mono); }
+  .viz-tip .r { display: flex; justify-content: space-between; gap: 16px; line-height: 1.6; }
+  .viz-tip .r span:last-child { font-family: var(--mono); }
+  .viz-tip .f { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; color: var(--muted); }
   .ago { color: var(--muted); }
   .path { color: var(--fg); opacity: .9; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msg { color: var(--fg); opacity: .85; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   .msg.empty { color: var(--muted); font-style: italic; }
-  .limit-bar {
-    display: inline-block; width: 70px; height: 5px;
-    background: var(--panel-2); border-radius: 3px; overflow: hidden;
-    vertical-align: middle; margin-left: 6px;
-  }
-  .limit-bar > span { display: block; height: 100%; background: var(--ok); }
-  .limit-bar > span.warn { background: var(--warn); }
-  .limit-bar > span.err { background: var(--err); }
   /* Session-quota panel: one card per rolling window (5h / weekly). */
   .quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
   .quota-win { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
@@ -387,6 +411,9 @@ ${i18nHead()}
   .quota-bar > span.warn { background: var(--warn); }
   .quota-bar > span.err { background: var(--err); }
   .quota-win .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .quota-acct { margin: 14px 0 8px; font-size: 13px; font-weight: 600; }
+  .quota-acct:first-child { margin-top: 0; }
+  .quota-acct .meta { margin-left: 6px; font-weight: 400; }
   .quota-raw { margin-top: 12px; }
   .quota-raw summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   .quota-raw table { margin-top: 8px; }
@@ -466,6 +493,33 @@ ${i18nHead()}
     font-family: var(--mono); white-space: nowrap;
   }
   .filter-bar .count.active { color: var(--accent); }
+
+  /* Glass theme (shared). Modals live outside the cards, so blur on .card is safe. */
+  ${glassCss('.card, aside.sidebar, header, .modal-box')}
+  .card { border-radius: 14px; }
+  .modal { background: rgba(0,0,0,.45); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+  .modal-box { background: rgba(22,27,34,.8); border-radius: 16px; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 24px 64px rgba(0,0,0,.5); }
+  .quota-win { border-radius: 12px; }
+  .scroll-y thead th { background: rgba(22,27,34,.92); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+  select, button { border-radius: 8px; transition: background .15s, border-color .15s, filter .15s; }
+  button:hover { background: rgba(255,255,255,.08); }
+  .pill { border: 1px solid rgba(255,255,255,.06); }
+  tbody tr { transition: background .15s; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+
+  /* Clients table: keep tokens, account pills and actions on one line each. */
+  .grid > * { min-width: 0; } /* let wide tables scroll inside their card instead of widening the page */
+  #clientsConfig td { vertical-align: middle; }
+  #clientsConfig code.config-info { white-space: nowrap; padding: 4px 8px; }
+  #clientsConfig .acct-list { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  #clientsConfig .pill { border-radius: 8px; }
+  #clientsConfig .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  #clientsConfig .actions button { white-space: nowrap; }
+  /* The 520px table min-width above is declared after the phone media query,
+     so re-zero it here or the stacked cards overflow their container. */
+  @media (max-width: 600px) {
+    #periodTable table, #modelsTable table, #clientsTable table, #clientsConfig table { min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -481,6 +535,7 @@ ${i18nHead()}
     <a href="#charts"><span class="icon">∿</span><span data-i18n="admin.nav.traffic">Traffic</span></a>
     <a href="#models"><span class="icon">◇</span><span data-i18n="admin.nav.models">By model</span></a>
     <a href="#clients"><span class="icon">◎</span><span data-i18n="admin.nav.clients">Clients</span></a>
+    <a href="#accounts"><span class="icon">☰</span><span data-i18n="acct.nav">Accounts</span></a>
     <a href="#recent"><span class="icon">»</span><span data-i18n="admin.nav.recent">Recent requests</span></a>
     <a href="#install"><span class="icon">⤓</span><span data-i18n="admin.nav.install">Install guide</span></a>
     <a href="#about"><span class="icon">?</span><span data-i18n="admin.nav.about">How to use</span></a>
@@ -510,11 +565,10 @@ ${i18nHead()}
     </div>
     <div class="row" id="topStats"></div>
     <section id="quota" class="card">
-      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic account</h2>
+      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
       <p class="meta" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
-        Live 5-hour rolling and weekly usage for the shared subscription account,
-        read from Anthropic's response headers. This is the whole account's quota,
-        shared across every client on this gateway.
+        Live 5-hour rolling and weekly usage per upstream subscription account,
+        read from Anthropic's response headers on that account's last request.
       </p>
       <div id="quotaBody"></div>
       <h2 style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
@@ -526,7 +580,7 @@ ${i18nHead()}
     </section>
     <section id="charts-section" class="card">
       <h2 data-i18n="admin.sec.charts">Requests over time (per client)</h2>
-      <div id="charts" class="grid"></div>
+      <div id="charts"></div>
     </section>
     <section id="models" class="card">
       <h2 data-i18n="admin.sec.models">By model</h2>
@@ -540,6 +594,7 @@ ${i18nHead()}
       <div id="clientsConfig" style="margin-bottom:12px"></div>
       <div id="clientsTable"></div>
     </section>
+    ${renderAccountsSection()}
     <section id="recent" class="card">
       <h2>
         <span data-i18n="admin.sec.recent">Recent requests</span>
@@ -548,6 +603,7 @@ ${i18nHead()}
       <div id="recentFilters" class="filter-bar" style="display:none">
         <input id="rfSearch" type="search" data-i18n-ph="admin.recent.searchPh" placeholder="Search client / path / model / message…" autocomplete="off" />
         <select id="rfClient"><option value="" data-i18n="admin.recent.allClients">All clients</option></select>
+        <select id="rfAccount"><option value="" data-i18n="admin.acctFilterAll">All accounts</option></select>
         <select id="rfModel"><option value="" data-i18n="admin.recent.allModels">All models</option></select>
         <select id="rfStatus">
           <option value="" data-i18n="admin.recent.allStatus">All status</option>
@@ -651,7 +707,7 @@ ${i18nHead()}
         <p style="margin:0 0 10px" data-i18n-html="admin.about.periods"><strong>Cost &amp; usage by period</strong> — same totals split by Today / Last 7d / Last 30d / All time so you can track spend trend.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.charts"><strong>Requests over time</strong> — per-client traffic. Toggle <em>Last 60 min</em> / <em>Last 24 h</em>.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.models"><strong>By model</strong> — per-model totals: calls, input/output/cache tokens, and cost. Cost uses Anthropic public list prices.</p>
-        <p style="margin:0 0 10px" data-i18n-html="admin.about.clients"><strong>Clients</strong> — every entry under <code>auth.tokens</code>, with their lifetime calls / tokens / cost. Click <strong>+ Add client</strong> to generate a token, append it to <code>config.yaml</code>, and download a launcher script.</p>
+        <p style="margin:0 0 10px" data-i18n-html="admin.about.clients"><strong>Clients</strong> — every client in the gateway database, with their lifetime calls / tokens / cost. Click <strong>+ Add client</strong> to generate a token and download a launcher script, then <strong>Accounts for this client</strong> on its row to choose which upstream accounts it may use.</p>
         <p style="margin:0 0 10px" data-i18n-html="admin.about.recent"><strong>Recent requests</strong> — last 50 requests with model, tokens, cost, and duration. New rows stream in at the top; updates pause while you're hovering so the view doesn't jump.</p>
         <p style="margin:0" data-i18n-html="admin.about.platform">Pick a target platform — <strong>macOS / Linux</strong> downloads <code>cc-&lt;name&gt;</code> (bash), <strong>Windows</strong> downloads <code>cc-&lt;name&gt;.ps1</code> (PowerShell). The "Client created" panel shows OS-specific install steps to copy into a terminal.</p>
       </div>
@@ -660,36 +716,11 @@ ${i18nHead()}
 </main>
 </div>
 
-<div id="oauthModal" class="modal" style="display:none">
-  <div class="modal-box">
-    <h3 data-i18n="admin.modal.oauth.title">Re-login with Claude</h3>
-    <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.oauth.note">Re-authenticates the gateway's shared Claude account.</p>
-
-    <label data-i18n="admin.modal.oauth.step1">1. Open the Claude sign-in page</label>
-    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n="admin.modal.oauth.step1note">Sign in with the account this gateway proxies, then approve access.</p>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button id="oaLink" type="button" data-i18n="admin.modal.oauth.openLink">Generate sign-in link</button>
-      <a id="oaOpen" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:var(--accent);font-size:13px" data-i18n="admin.modal.oauth.openTab">Open sign-in page ↗</a>
-    </div>
-
-    <label style="margin-top:16px" data-i18n="admin.modal.oauth.step2">2. Paste the authorization code</label>
-    <p class="meta" style="margin:0 0 8px;font-size:12px" data-i18n-html="admin.modal.oauth.step2note">Claude shows a code after you approve.</p>
-    <input id="oaCode" placeholder="Paste the code from Claude" data-i18n-ph="admin.modal.oauth.codePh" autocomplete="off" spellcheck="false" />
-
-    <div id="oaError" class="error" style="display:none;margin-top:12px"></div>
-    <div id="oaOk" class="meta" style="display:none;margin-top:12px;color:var(--ok)"></div>
-    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
-      <button id="oaCancel" type="button" data-i18n="common.cancel">Cancel</button>
-      <button id="oaSubmit" type="button" class="primary" data-i18n="admin.modal.oauth.submit">Finish sign-in</button>
-    </div>
-  </div>
-</div>
-
 <div id="addClientModal" class="modal" style="display:none">
   <div class="modal-box">
     <div id="modalForm">
       <h3 data-i18n="admin.modal.addClient.title">Add client</h3>
-      <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.addClient.note">Generates a token, appends it to <code>config.yaml</code>, and downloads a launcher script.</p>
+      <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.addClient.note">Generates a token, saves the client in the gateway database, and downloads a launcher script. Assign it an account afterwards (<strong>Accounts for this client</strong> on its row).</p>
       <label data-i18n="admin.modal.addClient.name">Client name</label>
       <input id="cName" placeholder="e.g. vuluu2k" data-i18n-ph="admin.modal.addClient.namePh" autocomplete="off" />
       <label data-i18n="admin.modal.gatewayAddr">Gateway address</label>
@@ -703,14 +734,6 @@ ${i18nHead()}
       <select id="cPlatform">
         <option value="unix" data-i18n="admin.modal.platform.unix">macOS / Linux (bash)</option>
         <option value="windows" data-i18n="admin.modal.platform.windows">Windows (PowerShell)</option>
-      </select>
-      <label data-i18n="admin.modal.costLimit.optional">Cost limit (USD) — optional, 0 = unlimited</label>
-      <input id="cLimit" type="number" min="0" step="0.01" placeholder="0" autocomplete="off" />
-      <label data-i18n="admin.modal.limitWindow">Limit window</label>
-      <select id="cLimitPeriod">
-        <option value="lifetime" data-i18n="admin.modal.period.lifetime">Lifetime</option>
-        <option value="monthly" data-i18n="admin.modal.period.monthly">Monthly (UTC)</option>
-        <option value="daily" data-i18n="admin.modal.period.daily">Daily (UTC)</option>
       </select>
       <div id="cError" class="error" style="display:none;margin-top:12px"></div>
       <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
@@ -822,25 +845,7 @@ ${i18nHead()}
   </div>
 </div>
 
-<div id="limitModal" class="modal" style="display:none">
-  <div class="modal-box">
-    <h3><span data-i18n="admin.modal.limit.title">Set cost limit</span> · <span id="limitName"></span></h3>
-    <p class="meta" style="margin:0 0 16px" data-i18n-html="admin.modal.limit.note">Block this client from <code>/v1/messages</code> when the window's cost reaches the limit. Other endpoints (free) keep working.</p>
-    <label data-i18n="admin.modal.limit.costLimit">Cost limit (USD) — 0 / empty = unlimited</label>
-    <input id="lLimit" type="number" min="0" step="0.01" placeholder="0" autocomplete="off" />
-    <label data-i18n="admin.modal.window">Window</label>
-    <select id="lPeriod">
-      <option value="lifetime" data-i18n="admin.modal.period.lifetime">Lifetime</option>
-      <option value="monthly" data-i18n="admin.modal.period.monthly">Monthly (UTC)</option>
-      <option value="daily" data-i18n="admin.modal.period.daily">Daily (UTC)</option>
-    </select>
-    <div id="lError" class="error" style="display:none;margin-top:12px"></div>
-    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
-      <button id="lCancel" type="button" data-i18n="common.cancel">Cancel</button>
-      <button id="lSubmit" type="button" class="primary" data-i18n="common.save">Save</button>
-    </div>
-  </div>
-</div>
+${renderBindingsModal()}
 
 <div id="workdirModal" class="modal" style="display:none">
   <div class="modal-box">
@@ -925,25 +930,67 @@ ${i18nHead()}
     return { ok, warn, err };
   };
 
+  // "▲ 12% vs prev 24h" — empty when there is nothing to compare against.
+  const fmtDelta = (cur, prev) => {
+    if (!prev) return '';
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    return (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct) + '% ' + t('admin.kpi.vsPrev');
+  };
+
   const renderTopStats = (data) => {
-    const tot = data.totals;
-    const errRate = tot.total ? ((tot.errors / tot.total) * 100).toFixed(1) : '0.0';
-    const html = [
-      [t('admin.stat.totalRequests'), fmtNum(tot.total)],
-      [t('admin.stat.totalCost'), fmtCost(tot.costUsd)],
-      [t('admin.stat.input'), fmtTokens(tot.inputTokens)],
-      [t('admin.stat.output'), fmtTokens(tot.outputTokens)],
-      [t('admin.stat.cacheRead'), fmtTokens(tot.cacheReadTokens)],
-      [t('admin.stat.cacheWrite'), fmtTokens(tot.cacheCreationTokens)],
-      [t('admin.stat.activeClients'), fmtNum(data.clients.length)],
-      [t('admin.stat.errors'), fmtNum(tot.errors) + ' (' + errRate + '%)'],
-      [t('admin.stat.uptime'), fmtUptime(data.uptimeMs)],
-    ].map(([label, value]) => \`
-      <div class="card stat">
-        <div class="value">\${value}</div>
-        <div class="label">\${label}</div>
+    const k = data.kpis || {};
+    const cur = k.last24h || {};
+    const prev = k.prev24h || {};
+    const p7 = (data.periods || []).find(p => p.key === '7d') || { costUsd: 0 };
+
+    const errPct = cur.total ? (cur.errors / cur.total) * 100 : 0;
+    const prompt = (cur.inputTokens || 0) + (cur.cacheReadTokens || 0) + (cur.cacheCreationTokens || 0);
+    const hitPct = prompt ? Math.round((cur.cacheReadTokens / prompt) * 100) : null;
+
+    // Tightest upstream account = highest 5h usage; that's the one about to block clients.
+    let tight = null;
+    for (const a of data.accounts || []) {
+      const q = (data.quotas || {})[a.id];
+      const w5 = q && (q.windows || []).find(w => w.key === '5h' && w.usedPct != null);
+      if (w5 && (!tight || w5.usedPct > tight.w5.usedPct)) {
+        tight = { id: a.id, w5, w7: (q.windows || []).find(w => w.key === '7d' && w.usedPct != null) };
+      }
+    }
+    const left5 = tight ? Math.max(0, 100 - Math.round(tight.w5.usedPct)) : null;
+
+    const top = k.topSpender;
+    const tiles = [
+      { label: t('admin.kpi.cost24h'), value: fmtCost(cur.costUsd || 0), sub: fmtDelta(cur.costUsd, prev.costUsd) },
+      { label: t('admin.kpi.projected'), value: fmtCost((p7.costUsd / 7) * 30), sub: t('admin.kpi.projectedSub', { cost: fmtCost(p7.costUsd) }) },
+      { label: t('admin.kpi.requests24h'), value: fmtNum(cur.total || 0), sub: fmtDelta(cur.total, prev.total) },
+      { label: t('admin.kpi.activeClients'), value: fmtNum(cur.activeClients || 0) + ' / ' + fmtNum(data.clients.length), sub: t('admin.kpi.activeClientsSub') },
+      {
+        label: t('admin.kpi.errorRate'), value: errPct.toFixed(1) + '%',
+        cls: errPct >= 5 ? 'err' : errPct >= 1 ? 'warn' : '',
+        sub: t('admin.kpi.errorSub', { up: fmtNum(cur.upstreamErrors || 0), gw: fmtNum(cur.gatewayErrors || 0) }),
+      },
+      {
+        label: t('admin.kpi.cacheHit'), value: hitPct == null ? '—' : hitPct + '%',
+        sub: t('admin.kpi.cacheHitSub', { tokens: fmtTokens(cur.cacheReadTokens || 0) }),
+      },
+      {
+        label: t('admin.kpi.quota'), value: left5 == null ? '—' : t('admin.quota.leftLabel', { pct: left5 }),
+        cls: left5 == null ? '' : left5 <= 10 ? 'err' : left5 <= 25 ? 'warn' : '',
+        sub: tight
+          ? esc(tight.id) + (tight.w7 ? ' · 7d ' + t('admin.quota.leftLabel', { pct: Math.max(0, 100 - Math.round(tight.w7.usedPct)) }) : '')
+          : t('admin.kpi.quotaNone'),
+      },
+      {
+        label: t('admin.kpi.topSpender'), value: top ? esc(top.client) : '—',
+        sub: top ? fmtCost(top.costUsd) + ' · ' + Math.round((top.costUsd / (cur.costUsd || 1)) * 100) + '%' : '',
+      },
+    ];
+    document.getElementById('topStats').innerHTML = tiles.map(s => \`
+      <div class="card stat \${s.cls || ''}">
+        <div class="label">\${s.label}</div>
+        <div class="value">\${s.value}</div>
+        <div class="sub">\${s.sub || '&nbsp;'}</div>
       </div>\`).join('');
-    document.getElementById('topStats').innerHTML = html;
   };
 
   const renderPeriods = (data) => {
@@ -951,6 +998,7 @@ ${i18nHead()}
     const periods = (data.periods || []).concat([{
       key: 'all', label: t('admin.period.allTime'),
       total: tot.total,
+      errors: tot.errors,
       inputTokens: tot.inputTokens,
       outputTokens: tot.outputTokens,
       cacheReadTokens: tot.cacheReadTokens,
@@ -963,6 +1011,7 @@ ${i18nHead()}
       <td class="num" data-label="\${esc(t('th.input'))}" title="\${fmtNum(p.inputTokens)} tokens">\${fmtTokens(p.inputTokens)}</td>
       <td class="num" data-label="\${esc(t('th.output'))}" title="\${fmtNum(p.outputTokens)} tokens">\${fmtTokens(p.outputTokens)}</td>
       <td class="num" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(p.cacheReadTokens)} · cache write \${fmtNum(p.cacheCreationTokens)}">\${fmtTokens((p.cacheReadTokens || 0) + (p.cacheCreationTokens || 0))}</td>
+      <td class="num" data-label="\${esc(t('th.errors'))}">\${fmtNum(p.errors || 0)}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(p.costUsd)}</strong></td>
     </tr>\`).join('');
     document.getElementById('periodTable').innerHTML = \`
@@ -973,6 +1022,7 @@ ${i18nHead()}
           <th class="num">\${esc(t('th.input'))}</th>
           <th class="num">\${esc(t('th.output'))}</th>
           <th class="num">\${esc(t('th.cache'))}</th>
+          <th class="num">\${esc(t('th.errors'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
         <tbody>\${rows}</tbody>
@@ -1031,12 +1081,24 @@ ${i18nHead()}
     return sec + 's';
   };
 
+  // One block per upstream account: each has its own 5h/weekly windows.
   const renderQuota = (data) => {
     const host = document.getElementById('quotaBody');
-    const q = data.quota;
-    if (!q || !q.windows || !q.windows.length) {
+    const quotas = data.quotas || {};
+    const accounts = data.accounts || [];
+    if (!accounts.some(a => quotas[a.id])) {
       host.innerHTML = '<div class="empty">' + esc(t('admin.quota.none')) + '</div>';
       return;
+    }
+    host.innerHTML = accounts.map(a =>
+      '<div class="quota-acct"><code>' + esc(a.id) + '</code>'
+        + (a.label ? '<span class="meta">' + esc(a.label) + '</span>' : '') + '</div>'
+        + quotaBlock(quotas[a.id])).join('');
+  };
+
+  const quotaBlock = (q) => {
+    if (!q || !q.windows || !q.windows.length) {
+      return '<div class="empty">' + esc(t('admin.quota.noneAccount')) + '</div>';
     }
     const winLabel = { '5h': t('admin.quota.win5h'), '7d': t('admin.quota.win7d') };
     const repKey = q.representative === 'seven_day' ? '7d'
@@ -1075,7 +1137,7 @@ ${i18nHead()}
       ? \`<details class="quota-raw"><summary>\${esc(t('admin.quota.rawSummary'))}</summary>
           <table><tbody>\${rawRows}</tbody></table></details>\`
       : '';
-    host.innerHTML = '<div class="quota-grid">' + cards + '</div>' + raw;
+    return '<div class="quota-grid">' + cards + '</div>' + raw;
   };
 
   const tickQuotaResets = () => {
@@ -1115,32 +1177,158 @@ ${i18nHead()}
       </table>\`;
   };
 
+  // Dark-mode categorical slots, fixed order (passes validate_palette.js on #14181d).
+  const SERIES_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9'];
+  const OTHER_COLOR = '#6e7681';
+  let chartModel = null;
+
+  const niceStep = (max) => {
+    const raw = max / 4;
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    return Math.max(1, [1, 2, 5, 10].map(m => m * p).find(s => s >= raw));
+  };
+
+  // Monotone cubic (Steffen) through evenly spaced points: smooth, but never
+  // overshoots a data point, so a line can't dip below 0 or invent a peak.
+  const smoothPath = (pts) => {
+    const f = (v) => v.toFixed(1);
+    const h = pts.length > 1 ? pts[1][0] - pts[0][0] : 0;
+    const d = pts.slice(1).map((p, i) => (p[1] - pts[i][1]) / h);
+    const m = pts.map((_, i) => i === 0 ? d[0] : i === pts.length - 1 ? d[i - 1]
+      : (Math.sign(d[i - 1]) + Math.sign(d[i])) * Math.min(Math.abs(d[i - 1]), Math.abs(d[i]), Math.abs(d[i - 1] + d[i]) / 4));
+    return 'M' + f(pts[0][0]) + ',' + f(pts[0][1]) + pts.slice(1).map((p, i) => 'C'
+      + f(pts[i][0] + h / 3) + ',' + f(pts[i][1] + m[i] * h / 3) + ' '
+      + f(p[0] - h / 3) + ',' + f(p[1] - m[i + 1] * h / 3) + ' ' + f(p[0]) + ',' + f(p[1])).join('');
+  };
+
   const renderCharts = (data) => {
-    const series = range() === 'hour' ? data.hourSeries : data.minuteSeries;
-    const unit = range() === 'hour' ? 'h' : 'm';
-    const clients = Object.keys(series);
-    if (!clients.length) {
-      document.getElementById('charts').innerHTML = '<div class="empty">' + esc(t('admin.empty.noTraffic')) + '</div>';
+    const el = document.getElementById('charts');
+    const hourly = range() === 'hour';
+    const series = hourly ? data.hourSeries : data.minuteSeries;
+    const names = Object.keys(series);
+    const sum = (c) => series[c].reduce((s, p) => s + p.count, 0);
+    // Colour follows the client's config order, so it never changes as traffic shifts.
+    // ponytail: clients past slot 7 fold into "Other" even when busy; facet if that bites.
+    const groups = [];
+    names.forEach((c, i) => {
+      if (!sum(c)) return;
+      if (i < SERIES_COLORS.length) return groups.push({ name: c, color: SERIES_COLORS[i], members: [c] });
+      let o = groups.find(g => g.other);
+      if (!o) groups.push(o = { name: t('admin.charts.other'), color: OTHER_COLOR, members: [], other: true });
+      o.members.push(c);
+    });
+    if (!groups.length) {
+      chartModel = null;
+      el.innerHTML = '<div class="empty">' + esc(t('admin.empty.noTraffic')) + '</div>';
       return;
     }
-    const max = Math.max(1, ...clients.flatMap(c => series[c].map(b => b.count)));
-    document.getElementById('charts').innerHTML = clients.map(c => {
-      const points = series[c];
-      const total = points.reduce((s, p) => s + p.count, 0);
-      const bars = points.map(p => {
-        const h = Math.round((p.count / max) * 100);
-        return \`<div class="bar" style="height:\${Math.max(1, h)}%" title="\${new Date(p.ts).toLocaleString()} — \${p.count} req"></div>\`;
-      }).join('');
-      return \`
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-            <strong>\${c}</strong>
-            <span class="meta">\${esc(t('admin.charts.reqUnit', { total: total, n: points.length, unit: unit }))}</span>
-          </div>
-          <div class="chart">\${bars}</div>
-        </div>\`;
-    }).join('');
+
+    const n = series[names[0]].length;
+    const buckets = Array.from({ length: n }, (_, i) => {
+      const b = { ts: series[names[0]][i].ts, total: 0, errors: 0, cost: 0 };
+      b.parts = groups.map(g => g.members.reduce((s, c) => s + series[c][i].count, 0));
+      for (const c of names) {
+        const p = series[c][i];
+        b.total += p.count; b.errors += p.errors || 0; b.cost += p.cost || 0;
+      }
+      return b;
+    });
+    groups.forEach((g, gi) => { g.total = buckets.reduce((s, b) => s + b.parts[gi], 0); });
+    const total = buckets.reduce((s, b) => s + b.total, 0);
+    const errors = buckets.reduce((s, b) => s + b.errors, 0);
+    const cost = buckets.reduce((s, b) => s + b.cost, 0);
+    const peak = buckets.reduce((a, b) => (b.total > a.total ? b : a));
+    const unit = hourly ? '/h' : '/min';
+    const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Geometry in real pixels so text never stretches.
+    const W = Math.max(280, el.clientWidth || 600), H = 220;
+    const m = { l: 40, r: 6, t: 8, b: 22 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    // Lines compare clients, so the scale is the busiest single client, not the stacked total.
+    const top = Math.max(1, ...buckets.flatMap(b => b.parts));
+    const step = niceStep(top);
+    const yMax = Math.ceil(top / step) * step;
+    const y = (v) => m.t + ph - (v / yMax) * ph;
+    const bw = pw / n;
+    const cx = (i) => m.l + i * bw + bw / 2;
+
+    let grid = '';
+    for (let v = 0; v <= yMax; v += step) {
+      grid += '<line class="gridline" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>'
+        + '<text class="axis" x="' + (m.l - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + fmtTokens(v) + '</text>';
+    }
+    // ~80px per time label so they never collide on narrow screens.
+    const every = Math.ceil(n / Math.max(2, Math.min(6, Math.floor(pw / 80))));
+    let xLabels = '';
+    buckets.forEach((b, i) => {
+      if ((n - 1 - i) % every) return;
+      const last = i === n - 1;
+      xLabels += '<text class="axis" x="' + (last ? W - m.r : cx(i)) + '" y="' + (H - 6) + '" text-anchor="' + (last ? 'end' : 'middle') + '">' + fmtTime(b.ts) + '</text>';
+    });
+    const lines = groups.map((g, gi) => '<path class="line" stroke="' + g.color + '" d="'
+      + smoothPath(buckets.map((b, i) => [cx(i), y(b.parts[gi])])) + '"/>').join('');
+
+    chartModel = { buckets, groups, m, bw, W, unit, hourly, fmtTime, cx, y };
+    const stat = (k, v) => '<div><span class="k">' + esc(k) + '</span><span class="v">' + v + '</span></div>';
+    el.innerHTML = '<div class="viz">'
+      + '<div class="viz-stats">'
+      + stat(t('admin.charts.total'), fmtNum(total))
+      + stat(t('admin.charts.peak'), fmtNum(peak.total) + '<small>' + unit + ' · ' + esc(fmtTime(peak.ts)) + '</small>')
+      + stat(t('admin.charts.avg'), (total / n).toFixed(1) + '<small>' + unit + '</small>')
+      + stat(t('th.errors'), fmtNum(errors) + '<small>' + (total ? (errors / total * 100).toFixed(1) : '0') + '%</small>')
+      + stat(t('th.cost'), fmtCost(cost))
+      + '</div>'
+      + '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(t('admin.sec.charts')) + '">'
+      + grid + '<line class="cursor" y1="' + m.t + '" y2="' + (m.t + ph) + '"/>' + lines + '<g class="dots"></g>' + xLabels + '</svg>'
+      + '<div class="viz-legend">' + groups.map(g => '<span><i class="sw" style="background:' + g.color + '"></i>'
+        + esc(g.name) + '<strong>' + fmtNum(g.total) + '</strong></span>').join('') + '</div>'
+      + '<div class="viz-tip"></div></div>';
+    if (hoverX != null) showTip(hoverX);
   };
+
+  // Hover lives on the stable container; the SVG inside is replaced on every refresh,
+  // so the last pointer x is kept and the tooltip re-shown after each render.
+  const chartsEl = document.getElementById('charts');
+  let hoverX = null;
+  const showTip = (clientX) => {
+    const svg = chartsEl.querySelector('svg');
+    const tip = chartsEl.querySelector('.viz-tip');
+    const cur = chartsEl.querySelector('.cursor');
+    if (!chartModel || !svg || !tip) return;
+    const { buckets, groups, m, bw, W, unit, hourly, fmtTime, cx, y } = chartModel;
+    const r = svg.getBoundingClientRect();
+    const i = Math.floor(((clientX - r.left) * (W / r.width) - m.l) / bw);
+    const inside = i >= 0 && i < buckets.length;
+    cur.classList.toggle('on', inside);
+    const dots = chartsEl.querySelector('.dots');
+    if (!inside) { tip.style.display = 'none'; dots.innerHTML = ''; return; }
+    const b = buckets[i];
+    const end = b.ts + (hourly ? 3_600_000 : 60_000);
+    cur.setAttribute('x1', cx(i));
+    cur.setAttribute('x2', cx(i));
+    dots.innerHTML = groups.map((g, gi) => '<circle class="dot" r="4" cx="' + cx(i) + '" cy="' + y(b.parts[gi]) + '" fill="' + g.color + '"/>').join('');
+    tip.innerHTML = '<div class="h">' + esc(fmtTime(b.ts) + ' – ' + fmtTime(end)) + '</div>'
+      + groups.map((g, gi) => '<div class="r"><span><i class="sw" style="background:' + g.color + '"></i>'
+        + esc(g.name) + '</span><span>' + fmtNum(b.parts[gi]) + '</span></div>').join('')
+      + '<div class="r f"><span>' + esc(t('admin.charts.total')) + '</span><span>' + fmtNum(b.total) + unit + '</span></div>'
+      + '<div class="r"><span>' + esc(t('th.errors')) + '</span><span>' + fmtNum(b.errors) + '</span></div>'
+      + '<div class="r"><span>' + esc(t('th.cost')) + '</span><span>' + fmtCost(b.cost) + '</span></div>';
+    tip.style.display = 'block';
+    const box = chartsEl.querySelector('.viz').getBoundingClientRect();
+    const colX = (m.l + (i + 1) * bw) * (r.width / W) + (r.left - box.left);
+    const left = colX + 10 + tip.offsetWidth > box.width ? colX - bw * (r.width / W) - 10 - tip.offsetWidth : colX + 10;
+    tip.style.left = Math.max(0, left) + 'px';
+    tip.style.top = (r.top - box.top + 8) + 'px';
+  };
+  chartsEl.addEventListener('mousemove', (e) => {
+    hoverX = e.target.closest('svg') ? e.clientX : null;
+    showTip(hoverX ?? -Infinity); // off-plot x hides tip, crosshair and dots
+  });
+  chartsEl.addEventListener('mouseleave', () => {
+    hoverX = null;
+    showTip(-Infinity);
+  });
 
   const renderClients = (data) => {
     if (!data.clients.length) {
@@ -1184,6 +1372,7 @@ ${i18nHead()}
         <thead><tr>
           <th>\${esc(t('th.when'))}</th>
           <th>\${esc(t('th.client'))}</th>
+          <th>\${esc(t('admin.acctColumn'))}</th>
           <th>\${esc(t('th.model'))}</th>
           <th>\${esc(t('th.message'))}</th>
           <th>\${esc(t('th.path'))}</th>
@@ -1217,6 +1406,7 @@ ${i18nHead()}
     tr.innerHTML = \`
       <td class="ago" data-ts="\${r.ts}" data-label="">\${fmtAgo(r.ts)}</td>
       <td data-label="\${esc(t('th.client'))}">\${esc(r.client)}</td>
+      <td data-label="\${esc(t('admin.acctColumn'))}">\${r.accountId ? '<code>' + esc(r.accountId) + '</code>' : '<span class="meta">—</span>'}</td>
       <td data-label="\${esc(t('th.model'))}"><span class="meta">\${esc(shortModel(r.model))}</span></td>
       \${msgCell}
       <td class="path" data-label="\${esc(t('th.path'))}" title="\${esc(r.method + ' ' + r.path)}">\${esc(r.path)}</td>
@@ -1235,15 +1425,16 @@ ${i18nHead()}
   let recentPaused = false;      // user is hovering the table
   let recentSeenTs = new Set();  // every ts considered (DOM-rendered OR filtered out)
 
-  const recentFilters = { search: '', client: '', model: '', status: '', method: '' };
+  const recentFilters = { search: '', client: '', account: '', model: '', status: '', method: '' };
 
   const recentFilterActive = () =>
-    !!(recentFilters.search || recentFilters.client || recentFilters.model
+    !!(recentFilters.search || recentFilters.client || recentFilters.account || recentFilters.model
       || recentFilters.status || recentFilters.method);
 
   const matchesRecentFilter = (r) => {
     const f = recentFilters;
     if (f.client && r.client !== f.client) return false;
+    if (f.account && (r.accountId || '') !== f.account) return false;
     if (f.model && (r.model || '') !== f.model) return false;
     if (f.method && r.method !== f.method) return false;
     if (f.status) {
@@ -1284,6 +1475,12 @@ ${i18nHead()}
     fillSelectKeepingValue(
       document.getElementById('rfClient'),
       Array.from(clientsSet).sort(),
+    );
+    const accountsSet = new Set();
+    for (const r of data.recent) if (r.accountId) accountsSet.add(r.accountId);
+    fillSelectKeepingValue(
+      document.getElementById('rfAccount'),
+      Array.from(accountsSet).sort(),
     );
     fillSelectKeepingValue(
       document.getElementById('rfModel'),
@@ -1457,7 +1654,7 @@ ${i18nHead()}
         return;
       }
       currentData = await res.json();
-      renderOAuthBanner(currentData.oauth);
+      renderOAuthBanner(currentData.accounts);
       renderTopStats(currentData);
       renderPeriods(currentData);
       renderCharts(currentData);
@@ -1466,123 +1663,37 @@ ${i18nHead()}
       renderModels(currentData);
       renderClients(currentData);
       renderRecent(currentData);
-      document.getElementById('updated').textContent = t('admin.toolbar.updated', { time: new Date().toLocaleTimeString() });
+      document.getElementById('updated').textContent = t('admin.toolbar.updated', { time: new Date().toLocaleTimeString() }) + ' · ' + t('admin.stat.uptime') + ' ' + fmtUptime(currentData.uptimeMs);
     } catch (e) {
       document.getElementById('updated').textContent = t('admin.toolbar.fetchErr');
     }
   };
 
-  // ── OAuth account health + re-login ──
-  // The gateway proxies one shared Claude account. When its refresh_token dies
-  // every /v1/* call 503s, so surface that here with a one-click recovery
-  // instead of making the admin edit config.yaml and restart the container.
-  const renderOAuthBanner = (oauth) => {
+  // ── OAuth account health banner ──
+  const renderOAuthBanner = (accounts) => {
     const banner = document.getElementById('oauthBanner');
-    if (!oauth || oauth.state === 'ok' || oauth.state === 'uninitialized') {
+    const expired = (accounts || []).filter((a) => a.state === 'expired');
+    if (!expired.length) {
       banner.style.display = 'none';
       return;
     }
-    const msgKey = oauth.state === 'expired'
-      ? 'admin.oauth.bannerExpired'
-      : 'admin.oauth.bannerRefreshing';
-    let msg = t(msgKey);
-    if (oauth.last_error) msg += ' ' + t('admin.oauth.detail', { error: oauth.last_error });
-    document.getElementById('oauthBannerMsg').textContent = msg;
+    document.getElementById('oauthBannerMsg').textContent =
+      t('admin.oauth.someExpired', { names: expired.map((a) => a.label || a.id).join(', ') });
     banner.style.display = 'flex';
   };
-
-  const showOaError = (msg) => {
-    const el = document.getElementById('oaError');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  const showOaOk = (msg) => {
-    const el = document.getElementById('oaOk');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  let oaLinkReady = false;
-  const openOauthModal = () => {
-    oaLinkReady = false;
-    document.getElementById('oaCode').value = '';
-    document.getElementById('oaOpen').style.display = 'none';
-    showOaError(null);
-    showOaOk(null);
-    document.getElementById('oauthModal').style.display = 'flex';
-  };
-  const closeOauthModal = () => {
-    document.getElementById('oauthModal').style.display = 'none';
-  };
-  const startOauthLogin = async () => {
-    const btn = document.getElementById('oaLink');
-    btn.disabled = true;
-    showOaError(null);
-    showOaOk(null);
-    try {
-      const res = await fetch('/api/oauth/login', { method: 'POST', credentials: 'same-origin' });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showOaError(t('admin.modal.oauth.linkErr', { error: err.error || res.status }));
-        return;
-      }
-      const data = await res.json();
-      const link = document.getElementById('oaOpen');
-      link.href = data.url;
-      link.style.display = 'inline';
-      oaLinkReady = true;
-      window.open(data.url, '_blank', 'noopener');
-      document.getElementById('oaCode').focus();
-    } catch (e) {
-      showOaError(t('admin.alert.networkErr'));
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  const submitOauthCode = async () => {
-    if (!oaLinkReady) { showOaError(t('admin.modal.oauth.needLink')); return; }
-    const code = document.getElementById('oaCode').value.trim();
-    if (!code) { showOaError(t('admin.modal.oauth.needCode')); return; }
-    const btn = document.getElementById('oaSubmit');
-    btn.disabled = true;
-    showOaError(null);
-    showOaOk(t('admin.modal.oauth.working'));
-    try {
-      const res = await fetch('/api/oauth/complete', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        showOaOk(null);
-        showOaError(t('admin.alert.failed', { error: data.error || res.status }));
-        return;
-      }
-      showOaOk(t('admin.modal.oauth.ok', { time: new Date(data.expires_at).toLocaleTimeString() }));
-      renderOAuthBanner(data.status);
-      setTimeout(() => { closeOauthModal(); refresh(); }, 1200);
-    } catch (e) {
-      showOaOk(null);
-      showOaError(t('admin.alert.networkErr'));
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  document.getElementById('oauthBannerBtn').addEventListener('click', openOauthModal);
-  document.getElementById('oaLink').addEventListener('click', startOauthLogin);
-  document.getElementById('oaSubmit').addEventListener('click', submitOauthCode);
-  document.getElementById('oaCancel').addEventListener('click', closeOauthModal);
-  document.getElementById('oauthModal').addEventListener('click', (e) => {
-    if (e.target.id === 'oauthModal') closeOauthModal();
-  });
-  document.getElementById('oaCode').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submitOauthCode();
+  // Re-login happens per account in the Accounts section.
+  document.getElementById('oauthBannerBtn').addEventListener('click', () => {
+    document.getElementById('accounts').scrollIntoView({ behavior: 'smooth' });
   });
 
   document.getElementById('refreshBtn').addEventListener('click', refresh);
   document.getElementById('rangeSel').addEventListener('change', () => {
     if (currentData) renderCharts(currentData);
+  });
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (currentData) renderCharts(currentData); }, 150);
   });
 
   // ── Recent requests filter bar ──
@@ -1592,6 +1703,7 @@ ${i18nHead()}
     const onChange = () => {
       recentFilters.search = document.getElementById('rfSearch').value.trim();
       recentFilters.client = document.getElementById('rfClient').value;
+      recentFilters.account = document.getElementById('rfAccount').value;
       recentFilters.model  = document.getElementById('rfModel').value;
       recentFilters.status = document.getElementById('rfStatus').value;
       recentFilters.method = document.getElementById('rfMethod').value;
@@ -1604,12 +1716,14 @@ ${i18nHead()}
     };
     document.getElementById('rfSearch').addEventListener('input', onSearchInput);
     document.getElementById('rfClient').addEventListener('change', onChange);
+    document.getElementById('rfAccount').addEventListener('change', onChange);
     document.getElementById('rfModel').addEventListener('change', onChange);
     document.getElementById('rfStatus').addEventListener('change', onChange);
     document.getElementById('rfMethod').addEventListener('change', onChange);
     document.getElementById('rfClear').addEventListener('click', () => {
       document.getElementById('rfSearch').value = '';
       document.getElementById('rfClient').value = '';
+      document.getElementById('rfAccount').value = '';
       document.getElementById('rfModel').value = '';
       document.getElementById('rfStatus').value = '';
       document.getElementById('rfMethod').value = '';
@@ -1618,18 +1732,6 @@ ${i18nHead()}
   })();
 
   // ── Clients management ──
-  const renderLimitCell = (c) => {
-    if (!c.cost_limit_usd) {
-      return '<span class="meta">' + esc(t('admin.client.unlimited')) + '</span>';
-    }
-    const used = c.cost_used_usd || 0;
-    const pct = Math.min(100, Math.round((used / c.cost_limit_usd) * 100));
-    const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : '';
-    const period = c.cost_limit_period || 'lifetime';
-    return \`<span title="\${esc(t('admin.client.windowTitle', { period: period }))}">\${fmtCost(used)} / \${fmtCost(c.cost_limit_usd)} (\${pct}%)</span>\` +
-      \`<span class="limit-bar"><span class="\${cls}" style="width:\${pct}%"></span></span>\`;
-  };
-
   const renderClientsConfig = (clients) => {
     const el = document.getElementById('clientsConfig');
     if (!clients.length) {
@@ -1640,23 +1742,31 @@ ${i18nHead()}
       <tr>
         <td data-label=""><strong>\${esc(c.name)}</strong></td>
         <td data-label="\${esc(t('th.token'))}"><code class="config-info">\${esc(c.token_preview)}</code></td>
-        <td data-label="\${esc(t('th.costLimit'))}">\${renderLimitCell(c)}</td>
         <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
-        <td data-label="" style="text-align:right;white-space:nowrap">
+        <td data-label="\${esc(t('th.accounts'))}"><div class="acct-list">\${(c.bindings || []).length
+          ? c.bindings.map(b => {
+              const pct = b.limitUsd > 0 ? Math.round((b.usedUsd / b.limitUsd) * 100) : 0;
+              const cls = pct >= 100 ? 'err' : pct >= 80 ? 'warn' : 'ok';
+              return '<span class="pill ' + cls + '" title="' + esc(t('bind.priority')) + ' ' + esc(b.priority) + '">'
+                + esc(b.accountId) + ' · ' + fmtCost(b.usedUsd)
+                + (b.limitUsd > 0 ? ' / ' + fmtCost(b.limitUsd) + ' (' + pct + '%) '
+                  + esc(t('bind.period' + b.limitPeriod.charAt(0).toUpperCase() + b.limitPeriod.slice(1))) : '')
+                + '</span>';
+            }).join('')
+          : '<span class="pill err">' + esc(t('bind.none')) + '</span>'}</div></td>
+        <td data-label=""><div class="actions">
           <button data-edit-workdir="\${esc(c.name)}" data-workdir="\${esc(c.home_dir || '')}">\${esc(t('admin.client.setWorkdir'))}</button>
-          <button data-edit-limit="\${esc(c.name)}"
-                  data-limit="\${c.cost_limit_usd || ''}"
-                  data-period="\${esc(c.cost_limit_period || 'lifetime')}">\${esc(t('admin.client.setLimit'))}</button>
+          <button data-bind-client="\${esc(c.name)}" title="\${esc(t('bind.title'))}">\${esc(t('th.accounts'))}</button>
           <button data-regen="\${esc(c.name)}">\${esc(t('admin.client.redownload'))}</button>
           <button data-reset-pw="\${esc(c.name)}">\${esc(t('admin.client.resetPw'))}</button>
           <button class="danger" data-del-client="\${esc(c.name)}">\${esc(t('admin.client.delete'))}</button>
-        </td>
+        </div></td>
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
-        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.costLimit'))}</th><th>\${esc(t('th.workdir'))}</th><th></th></tr></thead>
+        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.workdir'))}</th><th>\${esc(t('th.accounts'))}</th><th></th></tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
     el.querySelectorAll('[data-edit-workdir]').forEach(btn => {
@@ -1677,15 +1787,6 @@ ${i18nHead()}
           return;
         }
         loadClients();
-      });
-    });
-    el.querySelectorAll('[data-edit-limit]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openLimitModal(
-          btn.getAttribute('data-edit-limit'),
-          btn.getAttribute('data-limit'),
-          btn.getAttribute('data-period') || 'lifetime',
-        );
       });
     });
     el.querySelectorAll('[data-regen]').forEach(btn => {
@@ -1734,8 +1835,6 @@ ${i18nHead()}
     document.getElementById('cAddr').value = location.host;
     document.getElementById('cScheme').value = location.protocol === 'http:' ? 'http' : 'https';
     document.getElementById('cPlatform').value = 'unix';
-    document.getElementById('cLimit').value = '';
-    document.getElementById('cLimitPeriod').value = 'lifetime';
     showError(null);
     modalBoxEl().classList.remove('wide');
     document.getElementById('modalForm').style.display = 'block';
@@ -1869,13 +1968,7 @@ ${i18nHead()}
     const gateway_addr = document.getElementById('cAddr').value.trim();
     const scheme = document.getElementById('cScheme').value;
     const platform = document.getElementById('cPlatform').value;
-    const limitRaw = document.getElementById('cLimit').value.trim();
-    const cost_limit_usd = limitRaw === '' ? null : Number(limitRaw);
-    const cost_limit_period = document.getElementById('cLimitPeriod').value;
     if (!name) { showError(t('admin.err.nameRequired')); return; }
-    if (cost_limit_usd !== null && (!Number.isFinite(cost_limit_usd) || cost_limit_usd < 0)) {
-      showError(t('admin.err.costNonNeg')); return;
-    }
     const submitBtn = document.getElementById('cSubmit');
     submitBtn.disabled = true;
     try {
@@ -1883,7 +1976,7 @@ ${i18nHead()}
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, gateway_addr, scheme, platform, cost_limit_usd, cost_limit_period }),
+        body: JSON.stringify({ name, gateway_addr, scheme, platform }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1906,56 +1999,6 @@ ${i18nHead()}
       submitBtn.disabled = false;
     }
   };
-
-  // ── Set-limit modal ──
-  const showLimitError = (msg) => {
-    const el = document.getElementById('lError');
-    if (msg) { el.textContent = msg; el.style.display = 'block'; }
-    else { el.style.display = 'none'; }
-  };
-  const openLimitModal = (name, currentLimit, currentPeriod) => {
-    document.getElementById('limitName').textContent = name;
-    document.getElementById('lLimit').value = currentLimit && Number(currentLimit) > 0 ? currentLimit : '';
-    document.getElementById('lPeriod').value = currentPeriod || 'lifetime';
-    showLimitError(null);
-    document.getElementById('limitModal').style.display = 'flex';
-    document.getElementById('limitModal').setAttribute('data-name', name);
-    setTimeout(() => document.getElementById('lLimit').focus(), 0);
-  };
-  const closeLimitModal = () => { document.getElementById('limitModal').style.display = 'none'; };
-  const submitLimit = async () => {
-    const name = document.getElementById('limitModal').getAttribute('data-name');
-    const raw = document.getElementById('lLimit').value.trim();
-    const cost_limit_usd = raw === '' ? null : Number(raw);
-    const cost_limit_period = document.getElementById('lPeriod').value;
-    if (cost_limit_usd !== null && (!Number.isFinite(cost_limit_usd) || cost_limit_usd < 0)) {
-      showLimitError(t('admin.err.costNonNeg')); return;
-    }
-    const btn = document.getElementById('lSubmit');
-    btn.disabled = true;
-    try {
-      const res = await fetch('/api/clients/' + encodeURIComponent(name), {
-        method: 'PATCH',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cost_limit_usd, cost_limit_period }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showLimitError(err.error || t('admin.err.requestFailed', { status: res.status }));
-        return;
-      }
-      closeLimitModal();
-      loadClients();
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  document.getElementById('lCancel').addEventListener('click', closeLimitModal);
-  document.getElementById('lSubmit').addEventListener('click', submitLimit);
-  document.getElementById('limitModal').addEventListener('click', (e) => {
-    if (e.target.id === 'limitModal') closeLimitModal();
-  });
 
   // ── Set-workdir modal ──
   const showWorkdirError = (msg) => {
@@ -2094,6 +2137,7 @@ ${i18nHead()}
     'charts-section': 'admin.nav.traffic',
     'models': 'admin.nav.models',
     'clients': 'admin.nav.clients',
+    'accounts': 'acct.nav',
     'recent': 'admin.nav.recent',
     'install': 'admin.nav.install',
     'about': 'admin.nav.about',
@@ -2108,7 +2152,7 @@ ${i18nHead()}
     const title = document.getElementById('pageTitle');
     if (title && sectionToTitle[id]) title.textContent = t(sectionToTitle[id]);
   };
-  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'recent', 'install', 'about']
+  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'accounts', 'recent', 'install', 'about']
     .map(id => document.getElementById(id))
     .filter(Boolean);
   if ('IntersectionObserver' in window) {
@@ -2126,9 +2170,14 @@ ${i18nHead()}
     for (const el of observed) io.observe(el);
   }
 
+  ${accountsScript()}
+  ${bindingsScript()}
+
   loadClients();
   refresh();
-  setInterval(refresh, 5000);
+  // Skip polls while the tab is hidden; catch up as soon as it is shown again.
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   setInterval(tickAgoCells, 15000);
   setInterval(tickQuotaResets, 1000);
 })();

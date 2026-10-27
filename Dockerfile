@@ -18,8 +18,10 @@ COPY package.json ./
 RUN mkdir -p /app/data
 
 EXPOSE 8443
-# Config path defaults to /app/data/config.yaml (persistent volume).
-# If missing on first start, the container auto-generates it from
-# CCG_REFRESH_TOKEN env or a mounted credentials.json. Override path with
-# CCG_CONFIG_PATH env or by passing an arg to node.
+# Config path defaults to /app/data/config.yaml (persistent volume); if missing,
+# a default one is generated on first start. No credentials are needed: accounts,
+# clients and tokens live in /app/data/ccg.db and are managed from /admin (the
+# first admin uses the setup code printed in the log). CCG_REFRESH_TOKEN or a
+# mounted credentials.json only seeds a first account on a fresh database.
+# Override the path with CCG_CONFIG_PATH env or by passing an arg to node.
 CMD ["node", "dist/index.js"]

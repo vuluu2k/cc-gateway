@@ -3,6 +3,7 @@
 // — it stays reachable directly at /admin but is not advertised to clients.
 
 import { i18nHead, langSwitcher, icon } from './i18n.js'
+import { glassCss } from './glass.js'
 
 export function renderLanding(): string {
   return `<!DOCTYPE html>
@@ -136,6 +137,11 @@ ${i18nHead()}
   .band p { color: var(--muted); margin: 0 0 24px; }
   footer { padding: 28px 0; color: var(--muted); font-size: 13px; }
   footer .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  ${glassCss('.step, .feature, .faq details, .portal-card, .terminal')}
+  header { background: rgba(11,13,16,.55); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+  .terminal { background: rgba(13,17,23,.7); }
+  .portal-card { background: linear-gradient(135deg, rgba(31,111,235,.12), rgba(137,87,229,.10)), var(--panel); }
+  .step, .feature { border-radius: 14px; }
 </style>
 </head>
 <body>

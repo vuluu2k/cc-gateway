@@ -1,0 +1,72 @@
+# Deploy to VPS webcake-ai through a self-hosted runner installed ON that VPS
+# (see deploy/vps/README.md). The runner only dials out to GitHub, so the private-IP
+# box needs no inbound SSH from Actions. Same shape as webcake_bot on the same VPS.
+#
+# SECURITY: the repo is public. Leaving `pull_request` out of THIS file is not the
+# protection: a fork PR can add its own workflow with `runs-on: [self-hosted, cc-gateway]`
+# and GitHub runs the PR's workflow files. What stops that is the repo setting
+# Settings -> Actions -> General -> Fork pull request workflows ->
+# "Require approval for all external contributors", which MUST stay on
+# (see deploy/vps/README.md). Still never add `pull_request` here.
+
+name: Deploy VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time; a newer push waits instead of racing the running one.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, cc-gateway]
+    environment: production
+    timeout-minutes: 30
+    env:
+      APP_DIR: /home/cc/cc-gateway
+      BIND_IP: ${{ vars.BIND_IP }}
+      HOST_PORT: ${{ vars.HOST_PORT || '8443' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # data/ (DB, config.yaml, backups) is never removed: only code dirs are replaced,
+      # so a file deleted from the repo doesn't survive on the VPS.
+      - name: Ship source
+        run: |
+          : "${BIND_IP:?set repo variable BIND_IP}"
+          mkdir -p "$APP_DIR/data/backups"
+          rm -rf "$APP_DIR/src" "$APP_DIR/deploy" "$APP_DIR/tests"
+          git archive HEAD | tar -x -C "$APP_DIR"
+          printf 'BIND_IP=%s\nHOST_PORT=%s\n' "$BIND_IP" "$HOST_PORT" > "$APP_DIR/deploy/vps/.env"
+
+      - name: Backup DB
+        working-directory: ${{ env.APP_DIR }}/deploy/vps
+        run: sh backup.sh
+
+      - name: Build & restart
+        working-directory: ${{ env.APP_DIR }}/deploy/vps
+        run: docker compose up -d --build --remove-orphans
+
+      - name: Health check
+        working-directory: ${{ env.APP_DIR }}/deploy/vps
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fsS "http://$BIND_IP:$HOST_PORT/_health" && { echo; exit 0; }
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --tail 100 gateway
+          exit 1
+
+      - name: Prune old images
+        if: always()
+        run: |
+          docker image prune -f
+          docker builder prune -f --max-used-space 3gb

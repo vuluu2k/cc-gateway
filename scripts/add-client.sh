@@ -1,38 +1,30 @@
 #!/bin/bash
-# Generate a launcher script for a client.
-# Usage: bash scripts/add-client.sh <client-name> [token] [gateway-addr] [scheme]
+# Write a launcher script for a client token that ALREADY exists in the gateway.
+# Usage: bash scripts/add-client.sh <client-name> <token> [gateway-addr] [scheme]
 #
-# If token/addr are omitted, generates a new token and uses localhost defaults.
+# Clients live in the gateway's database, not in config.yaml, so this script cannot
+# create one. Add clients from the admin dashboard (Clients -> "+ Add client"), which
+# generates the token and downloads the launcher for you. This script only remains for
+# quick-setup.sh / admin-setup.sh, whose freshly written config.yaml client is imported
+# into the database on the gateway's first start.
 # scheme: "http" (default) or "https" (adds NODE_TLS_REJECT_UNAUTHORIZED=0 for self-signed certs)
 set -e
 
 cd "$(dirname "$0")/.."
 
-CLIENT_NAME="${1:?Usage: add-client.sh <client-name> [token] [gateway-addr] [scheme]}"
-CLIENT_TOKEN="${2:-$(openssl rand -hex 32)}"
+CLIENT_NAME="${1:?Usage: add-client.sh <client-name> <token> [gateway-addr] [scheme]}"
+if [[ -z "$2" ]]; then
+  echo "Error: no token given. Clients are no longer read from config.yaml." >&2
+  echo "Add the client from the admin dashboard (Clients -> \"+ Add client\") instead;" >&2
+  echo "it generates the token and downloads the launcher." >&2
+  exit 1
+fi
+CLIENT_TOKEN="$2"
 GATEWAY_ADDR="${3:-localhost:8443}"
 GATEWAY_SCHEME="${4:-http}"
 
-CONFIG="config.yaml"
 CLIENTS_DIR="clients"
 mkdir -p "$CLIENTS_DIR"
-
-# If token was auto-generated, append to config.yaml
-if [[ -z "$2" ]]; then
-  python3 -c "
-import yaml, sys
-with open('$CONFIG') as f:
-    cfg = yaml.safe_load(f)
-cfg['auth']['tokens'].append({'name': '$CLIENT_NAME', 'token': '$CLIENT_TOKEN'})
-with open('$CONFIG', 'w') as f:
-    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
-" 2>/dev/null || {
-    echo "Note: Could not auto-update config.yaml. Add this manually:"
-    echo "  - name: ${CLIENT_NAME}"
-    echo "    token: ${CLIENT_TOKEN}"
-  }
-  echo "✓ Token added to config.yaml (gateway will hot-reload within ~2s)"
-fi
 
 # Generate the launcher script
 LAUNCHER="${CLIENTS_DIR}/cc-${CLIENT_NAME}"
