@@ -497,46 +497,48 @@ export function getMetricsSnapshot() {
 
   const minuteRows = db
     .prepare(
-      `SELECT client, (ts / ${MINUTE_MS}) * ${MINUTE_MS} as bucket, COUNT(*) as count
+      `SELECT client, (ts / ${MINUTE_MS}) * ${MINUTE_MS} as bucket, COUNT(*) as count,
+         SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, SUM(cost_usd) as cost
        FROM request_metrics
        WHERE ts >= ?
        GROUP BY client, bucket`,
     )
-    .all(minuteStart) as Array<{ client: string; bucket: number; count: number }>
+    .all(minuteStart) as Array<{ client: string; bucket: number; count: number; errors: number; cost: number }>
 
   const hourRows = db
     .prepare(
-      `SELECT client, (ts / ${HOUR_MS}) * ${HOUR_MS} as bucket, COUNT(*) as count
+      `SELECT client, (ts / ${HOUR_MS}) * ${HOUR_MS} as bucket, COUNT(*) as count,
+         SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, SUM(cost_usd) as cost
        FROM request_metrics
        WHERE ts >= ?
        GROUP BY client, bucket`,
     )
-    .all(hourStart) as Array<{ client: string; bucket: number; count: number }>
+    .all(hourStart) as Array<{ client: string; bucket: number; count: number; errors: number; cost: number }>
 
-  const minuteSeries: Record<string, Array<{ ts: number; count: number }>> = {}
-  const hourSeries: Record<string, Array<{ ts: number; count: number }>> = {}
+  const minuteSeries: Record<string, Array<{ ts: number; count: number; errors: number; cost: number }>> = {}
+  const hourSeries: Record<string, Array<{ ts: number; count: number; errors: number; cost: number }>> = {}
 
   for (const c of clients) {
     minuteSeries[c.name] = []
     for (let i = MINUTES_KEPT - 1; i >= 0; i--) {
-      minuteSeries[c.name].push({ ts: currentMinute - i * MINUTE_MS, count: 0 })
+      minuteSeries[c.name].push({ ts: currentMinute - i * MINUTE_MS, count: 0, errors: 0, cost: 0 })
     }
     hourSeries[c.name] = []
     for (let i = HOURS_KEPT - 1; i >= 0; i--) {
-      hourSeries[c.name].push({ ts: currentHour - i * HOUR_MS, count: 0 })
+      hourSeries[c.name].push({ ts: currentHour - i * HOUR_MS, count: 0, errors: 0, cost: 0 })
     }
   }
   for (const r of minuteRows) {
     const series = minuteSeries[r.client]
     if (!series) continue
     const point = series.find((p) => p.ts === r.bucket)
-    if (point) point.count = r.count
+    if (point) Object.assign(point, { count: r.count, errors: r.errors || 0, cost: r.cost || 0 })
   }
   for (const r of hourRows) {
     const series = hourSeries[r.client]
     if (!series) continue
     const point = series.find((p) => p.ts === r.bucket)
-    if (point) point.count = r.count
+    if (point) Object.assign(point, { count: r.count, errors: r.errors || 0, cost: r.cost || 0 })
   }
 
   const recent = (db

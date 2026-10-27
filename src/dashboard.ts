@@ -370,9 +370,30 @@ ${i18nHead()}
   .pill.ok { background: rgba(63,185,80,.15); color: var(--ok); }
   .pill.warn { background: rgba(210,153,34,.15); color: var(--warn); }
   .pill.err { background: rgba(248,81,73,.15); color: var(--err); }
-  .chart { display: flex; align-items: flex-end; gap: 1px; height: 70px; padding-top: 4px; }
-  .bar { flex: 1; background: var(--accent); opacity: .85; border-radius: 1px 1px 0 0; min-height: 1px; }
-  .bar:hover { opacity: 1; }
+  /* Traffic chart: one line per client, colour = client (validated dark categorical palette). */
+  .viz { position: relative; }
+  .viz-stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-bottom: 14px; }
+  .viz-stats > div { display: flex; flex-direction: column; gap: 2px; }
+  .viz-stats .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .viz-stats .v { font-family: var(--mono); font-size: 18px; font-weight: 600; }
+  .viz-stats .v small { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .viz svg { display: block; width: 100%; height: 220px; }
+  .viz .axis { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+  .viz .gridline { stroke: var(--border); }
+  .viz .cursor { stroke: var(--muted); stroke-dasharray: 3 3; opacity: 0; }
+  .viz .cursor.on { opacity: 1; }
+  .viz .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .viz .dot { stroke: #14181d; stroke-width: 2; }
+  .viz-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .viz-legend strong { color: var(--fg); font-family: var(--mono); font-weight: 500; margin-left: 4px; }
+  .viz-tip { position: absolute; top: 0; display: none; pointer-events: none; z-index: 5; min-width: 180px;
+    background: #161b22; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .viz-tip .h { color: var(--muted); margin-bottom: 6px; font-family: var(--mono); }
+  .viz-tip .r { display: flex; justify-content: space-between; gap: 16px; line-height: 1.6; }
+  .viz-tip .r span:last-child { font-family: var(--mono); }
+  .viz-tip .f { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; color: var(--muted); }
   .ago { color: var(--muted); }
   .path { color: var(--fg); opacity: .9; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msg { color: var(--fg); opacity: .85; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -559,7 +580,7 @@ ${i18nHead()}
     </section>
     <section id="charts-section" class="card">
       <h2 data-i18n="admin.sec.charts">Requests over time (per client)</h2>
-      <div id="charts" class="grid"></div>
+      <div id="charts"></div>
     </section>
     <section id="models" class="card">
       <h2 data-i18n="admin.sec.models">By model</h2>
@@ -1156,33 +1177,158 @@ ${renderBindingsModal()}
       </table>\`;
   };
 
+  // Dark-mode categorical slots, fixed order (passes validate_palette.js on #14181d).
+  const SERIES_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9'];
+  const OTHER_COLOR = '#6e7681';
+  let chartModel = null;
+
+  const niceStep = (max) => {
+    const raw = max / 4;
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    return Math.max(1, [1, 2, 5, 10].map(m => m * p).find(s => s >= raw));
+  };
+
+  // Monotone cubic (Steffen) through evenly spaced points: smooth, but never
+  // overshoots a data point, so a line can't dip below 0 or invent a peak.
+  const smoothPath = (pts) => {
+    const f = (v) => v.toFixed(1);
+    const h = pts.length > 1 ? pts[1][0] - pts[0][0] : 0;
+    const d = pts.slice(1).map((p, i) => (p[1] - pts[i][1]) / h);
+    const m = pts.map((_, i) => i === 0 ? d[0] : i === pts.length - 1 ? d[i - 1]
+      : (Math.sign(d[i - 1]) + Math.sign(d[i])) * Math.min(Math.abs(d[i - 1]), Math.abs(d[i]), Math.abs(d[i - 1] + d[i]) / 4));
+    return 'M' + f(pts[0][0]) + ',' + f(pts[0][1]) + pts.slice(1).map((p, i) => 'C'
+      + f(pts[i][0] + h / 3) + ',' + f(pts[i][1] + m[i] * h / 3) + ' '
+      + f(p[0] - h / 3) + ',' + f(p[1] - m[i + 1] * h / 3) + ' ' + f(p[0]) + ',' + f(p[1])).join('');
+  };
+
   const renderCharts = (data) => {
-    const series = range() === 'hour' ? data.hourSeries : data.minuteSeries;
-    const unit = range() === 'hour' ? 'h' : 'm';
+    const el = document.getElementById('charts');
+    const hourly = range() === 'hour';
+    const series = hourly ? data.hourSeries : data.minuteSeries;
+    const names = Object.keys(series);
     const sum = (c) => series[c].reduce((s, p) => s + p.count, 0);
-    const clients = Object.keys(series).filter(c => sum(c) > 0).sort((a, b) => sum(b) - sum(a));
-    if (!clients.length) {
-      document.getElementById('charts').innerHTML = '<div class="empty">' + esc(t('admin.empty.noTraffic')) + '</div>';
+    // Colour follows the client's config order, so it never changes as traffic shifts.
+    // ponytail: clients past slot 7 fold into "Other" even when busy; facet if that bites.
+    const groups = [];
+    names.forEach((c, i) => {
+      if (!sum(c)) return;
+      if (i < SERIES_COLORS.length) return groups.push({ name: c, color: SERIES_COLORS[i], members: [c] });
+      let o = groups.find(g => g.other);
+      if (!o) groups.push(o = { name: t('admin.charts.other'), color: OTHER_COLOR, members: [], other: true });
+      o.members.push(c);
+    });
+    if (!groups.length) {
+      chartModel = null;
+      el.innerHTML = '<div class="empty">' + esc(t('admin.empty.noTraffic')) + '</div>';
       return;
     }
-    const max = Math.max(1, ...clients.flatMap(c => series[c].map(b => b.count)));
-    document.getElementById('charts').innerHTML = clients.map(c => {
-      const points = series[c];
-      const total = sum(c);
-      const bars = points.map(p => {
-        const h = Math.round((p.count / max) * 100);
-        return \`<div class="bar" style="height:\${Math.max(1, h)}%" title="\${new Date(p.ts).toLocaleString()} — \${p.count} req"></div>\`;
-      }).join('');
-      return \`
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-            <strong>\${c}</strong>
-            <span class="meta">\${esc(t('admin.charts.reqUnit', { total: total, n: points.length, unit: unit }))}</span>
-          </div>
-          <div class="chart">\${bars}</div>
-        </div>\`;
-    }).join('');
+
+    const n = series[names[0]].length;
+    const buckets = Array.from({ length: n }, (_, i) => {
+      const b = { ts: series[names[0]][i].ts, total: 0, errors: 0, cost: 0 };
+      b.parts = groups.map(g => g.members.reduce((s, c) => s + series[c][i].count, 0));
+      for (const c of names) {
+        const p = series[c][i];
+        b.total += p.count; b.errors += p.errors || 0; b.cost += p.cost || 0;
+      }
+      return b;
+    });
+    groups.forEach((g, gi) => { g.total = buckets.reduce((s, b) => s + b.parts[gi], 0); });
+    const total = buckets.reduce((s, b) => s + b.total, 0);
+    const errors = buckets.reduce((s, b) => s + b.errors, 0);
+    const cost = buckets.reduce((s, b) => s + b.cost, 0);
+    const peak = buckets.reduce((a, b) => (b.total > a.total ? b : a));
+    const unit = hourly ? '/h' : '/min';
+    const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Geometry in real pixels so text never stretches.
+    const W = Math.max(280, el.clientWidth || 600), H = 220;
+    const m = { l: 40, r: 6, t: 8, b: 22 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    // Lines compare clients, so the scale is the busiest single client, not the stacked total.
+    const top = Math.max(1, ...buckets.flatMap(b => b.parts));
+    const step = niceStep(top);
+    const yMax = Math.ceil(top / step) * step;
+    const y = (v) => m.t + ph - (v / yMax) * ph;
+    const bw = pw / n;
+    const cx = (i) => m.l + i * bw + bw / 2;
+
+    let grid = '';
+    for (let v = 0; v <= yMax; v += step) {
+      grid += '<line class="gridline" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>'
+        + '<text class="axis" x="' + (m.l - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + fmtTokens(v) + '</text>';
+    }
+    // ~80px per time label so they never collide on narrow screens.
+    const every = Math.ceil(n / Math.max(2, Math.min(6, Math.floor(pw / 80))));
+    let xLabels = '';
+    buckets.forEach((b, i) => {
+      if ((n - 1 - i) % every) return;
+      const last = i === n - 1;
+      xLabels += '<text class="axis" x="' + (last ? W - m.r : cx(i)) + '" y="' + (H - 6) + '" text-anchor="' + (last ? 'end' : 'middle') + '">' + fmtTime(b.ts) + '</text>';
+    });
+    const lines = groups.map((g, gi) => '<path class="line" stroke="' + g.color + '" d="'
+      + smoothPath(buckets.map((b, i) => [cx(i), y(b.parts[gi])])) + '"/>').join('');
+
+    chartModel = { buckets, groups, m, bw, W, unit, hourly, fmtTime, cx, y };
+    const stat = (k, v) => '<div><span class="k">' + esc(k) + '</span><span class="v">' + v + '</span></div>';
+    el.innerHTML = '<div class="viz">'
+      + '<div class="viz-stats">'
+      + stat(t('admin.charts.total'), fmtNum(total))
+      + stat(t('admin.charts.peak'), fmtNum(peak.total) + '<small>' + unit + ' · ' + esc(fmtTime(peak.ts)) + '</small>')
+      + stat(t('admin.charts.avg'), (total / n).toFixed(1) + '<small>' + unit + '</small>')
+      + stat(t('th.errors'), fmtNum(errors) + '<small>' + (total ? (errors / total * 100).toFixed(1) : '0') + '%</small>')
+      + stat(t('th.cost'), fmtCost(cost))
+      + '</div>'
+      + '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(t('admin.sec.charts')) + '">'
+      + grid + '<line class="cursor" y1="' + m.t + '" y2="' + (m.t + ph) + '"/>' + lines + '<g class="dots"></g>' + xLabels + '</svg>'
+      + '<div class="viz-legend">' + groups.map(g => '<span><i class="sw" style="background:' + g.color + '"></i>'
+        + esc(g.name) + '<strong>' + fmtNum(g.total) + '</strong></span>').join('') + '</div>'
+      + '<div class="viz-tip"></div></div>';
+    if (hoverX != null) showTip(hoverX);
   };
+
+  // Hover lives on the stable container; the SVG inside is replaced on every refresh,
+  // so the last pointer x is kept and the tooltip re-shown after each render.
+  const chartsEl = document.getElementById('charts');
+  let hoverX = null;
+  const showTip = (clientX) => {
+    const svg = chartsEl.querySelector('svg');
+    const tip = chartsEl.querySelector('.viz-tip');
+    const cur = chartsEl.querySelector('.cursor');
+    if (!chartModel || !svg || !tip) return;
+    const { buckets, groups, m, bw, W, unit, hourly, fmtTime, cx, y } = chartModel;
+    const r = svg.getBoundingClientRect();
+    const i = Math.floor(((clientX - r.left) * (W / r.width) - m.l) / bw);
+    const inside = i >= 0 && i < buckets.length;
+    cur.classList.toggle('on', inside);
+    const dots = chartsEl.querySelector('.dots');
+    if (!inside) { tip.style.display = 'none'; dots.innerHTML = ''; return; }
+    const b = buckets[i];
+    const end = b.ts + (hourly ? 3_600_000 : 60_000);
+    cur.setAttribute('x1', cx(i));
+    cur.setAttribute('x2', cx(i));
+    dots.innerHTML = groups.map((g, gi) => '<circle class="dot" r="4" cx="' + cx(i) + '" cy="' + y(b.parts[gi]) + '" fill="' + g.color + '"/>').join('');
+    tip.innerHTML = '<div class="h">' + esc(fmtTime(b.ts) + ' – ' + fmtTime(end)) + '</div>'
+      + groups.map((g, gi) => '<div class="r"><span><i class="sw" style="background:' + g.color + '"></i>'
+        + esc(g.name) + '</span><span>' + fmtNum(b.parts[gi]) + '</span></div>').join('')
+      + '<div class="r f"><span>' + esc(t('admin.charts.total')) + '</span><span>' + fmtNum(b.total) + unit + '</span></div>'
+      + '<div class="r"><span>' + esc(t('th.errors')) + '</span><span>' + fmtNum(b.errors) + '</span></div>'
+      + '<div class="r"><span>' + esc(t('th.cost')) + '</span><span>' + fmtCost(b.cost) + '</span></div>';
+    tip.style.display = 'block';
+    const box = chartsEl.querySelector('.viz').getBoundingClientRect();
+    const colX = (m.l + (i + 1) * bw) * (r.width / W) + (r.left - box.left);
+    const left = colX + 10 + tip.offsetWidth > box.width ? colX - bw * (r.width / W) - 10 - tip.offsetWidth : colX + 10;
+    tip.style.left = Math.max(0, left) + 'px';
+    tip.style.top = (r.top - box.top + 8) + 'px';
+  };
+  chartsEl.addEventListener('mousemove', (e) => {
+    hoverX = e.target.closest('svg') ? e.clientX : null;
+    showTip(hoverX ?? -Infinity); // off-plot x hides tip, crosshair and dots
+  });
+  chartsEl.addEventListener('mouseleave', () => {
+    hoverX = null;
+    showTip(-Infinity);
+  });
 
   const renderClients = (data) => {
     if (!data.clients.length) {
@@ -1543,6 +1689,11 @@ ${renderBindingsModal()}
   document.getElementById('refreshBtn').addEventListener('click', refresh);
   document.getElementById('rangeSel').addEventListener('change', () => {
     if (currentData) renderCharts(currentData);
+  });
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (currentData) renderCharts(currentData); }, 150);
   });
 
   // ── Recent requests filter bar ──
