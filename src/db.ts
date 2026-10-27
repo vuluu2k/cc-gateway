@@ -146,6 +146,14 @@ function migrate(db: Database.Database) {
   if (!acctCols.some((c) => c.name === 'proxy_url')) {
     db.exec("ALTER TABLE accounts ADD COLUMN proxy_url TEXT NOT NULL DEFAULT ''")
   }
+
+  // ── Per-account model / effort blocklists (comma-separated, lowercase) ──
+  if (!acctCols.some((c) => c.name === 'blocked_models')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN blocked_models TEXT NOT NULL DEFAULT ''")
+  }
+  if (!acctCols.some((c) => c.name === 'blocked_efforts')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN blocked_efforts TEXT NOT NULL DEFAULT ''")
+  }
 }
 
 export function getOrCreateMeta(key: string, factory: () => string): string {

@@ -29,6 +29,8 @@ export type AccountView = {
   enabled: boolean
   // Password-masked (user:***@host); the raw URL never leaves the server.
   proxyUrl: string
+  blockedModels: string[]
+  blockedEfforts: string[]
   hasRefreshToken: boolean
   loginPending: boolean
   // When the REFRESH token itself expires, if the server told us. In-memory
@@ -84,6 +86,8 @@ function toView(row: AccountRow): AccountView {
     promptEnv: row.promptEnv,
     enabled: row.enabled,
     proxyUrl: maskProxyUrl(row.proxyUrl),
+    blockedModels: row.blockedModels,
+    blockedEfforts: row.blockedEfforts,
     hasRefreshToken: row.refreshToken !== '',
     loginPending: pending !== undefined && pending.expiresAt > Date.now(),
     refreshTokenExpiresAt: runtimes.get(row.id)?.refreshTokenExpiresAt ?? null,
@@ -292,6 +296,8 @@ export function updateAccount(
     env?: Record<string, unknown> | null
     promptEnv?: Record<string, unknown> | null
     proxyUrl?: string
+    blockedModels?: string[]
+    blockedEfforts?: string[]
   },
 ): AccountView {
   if (patch.proxyUrl !== undefined) {
@@ -406,7 +412,18 @@ export type SelectResult =
   | { ok: true; accountId: string; accessToken: string; row: AccountRow }
   | { ok: false; reason: 'no-bindings' }
   | { ok: false; reason: 'quota'; blocked: BlockedBinding[] }
+  | { ok: false; reason: 'restricted' }
   | { ok: false; reason: 'unavailable' }
+
+/** What a /v1/messages call asks for; empty when the body names nothing. */
+export type RequestSpec = { model: string; effort: string }
+
+export function isRestricted(row: AccountRow, spec: RequestSpec): boolean {
+  const model = spec.model.toLowerCase()
+  const effort = spec.effort.toLowerCase()
+  return (model !== '' && row.blockedModels.some((m) => model.includes(m)))
+    || (effort !== '' && row.blockedEfforts.includes(effort))
+}
 
 /**
  * Pick the account a client's next request should spend against.
@@ -417,13 +434,19 @@ export type SelectResult =
  * dead account only drops out on the NEXT call, once its state has been updated.
  *
  * `billable` is false for the free endpoints (settings, event logging, …), which
- * must not be gated on a spending limit.
+ * must not be gated on a spending limit. `spec` skips accounts that block the
+ * requested model or effort.
  */
-export function selectAccountFor(clientName: string, billable: boolean): SelectResult {
+export function selectAccountFor(
+  clientName: string,
+  billable: boolean,
+  spec: RequestSpec = { model: '', effort: '' },
+): SelectResult {
   const bindings = listBindings(clientName)
   if (bindings.length === 0) return { ok: false, reason: 'no-bindings' }
 
   const blocked: BlockedBinding[] = []
+  let restricted = false
 
   for (const binding of bindings) {
     const row = getAccountRow(binding.accountId)
@@ -431,6 +454,11 @@ export function selectAccountFor(clientName: string, billable: boolean): SelectR
 
     const accessToken = getAccessTokenFor(binding.accountId)
     if (!accessToken) continue
+
+    if (isRestricted(row, spec)) {
+      restricted = true
+      continue
+    }
 
     if (billable && binding.limitUsd > 0) {
       const used = getClientAccountCostSince(
@@ -455,5 +483,6 @@ export function selectAccountFor(clientName: string, billable: boolean): SelectR
   // Quota wins over availability in the report: a client that burned through
   // every limit needs a different message than one whose accounts all died.
   if (blocked.length > 0) return { ok: false, reason: 'quota', blocked }
+  if (restricted) return { ok: false, reason: 'restricted' }
   return { ok: false, reason: 'unavailable' }
 }

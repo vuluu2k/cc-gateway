@@ -19,6 +19,10 @@ export type AccountRow = {
   promptEnv: Record<string, unknown> | null
   enabled: boolean
   proxyUrl: string
+  // Lowercase. A model matches when its id contains any entry ("opus" blocks
+  // every Opus); an effort matches exactly. Routing skips accounts that match.
+  blockedModels: string[]
+  blockedEfforts: string[]
   createdAt: number
 }
 
@@ -41,8 +45,11 @@ type RawAccount = {
   id: string; label: string; refresh_token: string; access_token: string
   expires_at: number; state: string; last_error: string; last_refresh_at: number
   device_id: string; email: string; env_json: string; prompt_env_json: string
-  enabled: number; proxy_url: string; created_at: number
+  enabled: number; proxy_url: string; blocked_models: string; blocked_efforts: string
+  created_at: number
 }
+
+const splitList = (raw: string): string[] => (raw ? raw.split(',') : [])
 
 /** Parse a stored JSON column. An empty or malformed value means "inherit". */
 function parseJson(raw: string): Record<string, unknown> | null {
@@ -71,6 +78,8 @@ function toAccount(r: RawAccount): AccountRow {
     promptEnv: parseJson(r.prompt_env_json),
     enabled: r.enabled === 1,
     proxyUrl: r.proxy_url,
+    blockedModels: splitList(r.blocked_models),
+    blockedEfforts: splitList(r.blocked_efforts),
     createdAt: r.created_at,
   }
 }
@@ -161,6 +170,14 @@ export function updateAccountRow(
   if ('promptEnv' in patch) {
     sets.push('prompt_env_json = ?')
     values.push(patch.promptEnv ? JSON.stringify(patch.promptEnv) : '')
+  }
+  if (patch.blockedModels) {
+    sets.push('blocked_models = ?')
+    values.push(patch.blockedModels.join(','))
+  }
+  if (patch.blockedEfforts) {
+    sets.push('blocked_efforts = ?')
+    values.push(patch.blockedEfforts.join(','))
   }
 
   if (sets.length > 0) {

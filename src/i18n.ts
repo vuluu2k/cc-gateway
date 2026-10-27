@@ -434,6 +434,21 @@ const M: Record<string, Entry> = {
     zh: '当前：{url}。留空则保持不变。',
   },
   'acct.proxyClear': { en: 'Clear proxy', vi: 'Xóa proxy', zh: '清除代理' },
+  'acct.selectAll': { en: 'Select all', vi: 'Chọn tất cả', zh: '全选' },
+  'acct.selected': { en: '{n} selected', vi: 'Đã chọn {n}', zh: '已选 {n} 个' },
+  'acct.blockModelsPh': {
+    en: 'Blocked models, comma-separated (e.g. opus, claude-sonnet-4-5) - empty = none',
+    vi: 'Model bị chặn, cách nhau bằng dấu phẩy (vd: opus, claude-sonnet-4-5) - để trống = không chặn',
+    zh: '禁用的模型，逗号分隔（如 opus, claude-sonnet-4-5）- 留空 = 不禁用',
+  },
+  'acct.blockEfforts': { en: 'Blocked effort:', vi: 'Chặn effort:', zh: '禁用 effort：' },
+  'acct.blockApply': { en: 'Apply to selected', vi: 'Áp dụng cho mục đã chọn', zh: '应用到所选' },
+  'acct.blockClear': { en: 'Unblock selected', vi: 'Bỏ chặn mục đã chọn', zh: '解除所选限制' },
+  'acct.blocked': {
+    en: 'Blocked on this account - requests for it go to the next account, or get 403',
+    vi: 'Bị chặn trên tài khoản này - yêu cầu sẽ chuyển sang tài khoản kế tiếp, hoặc nhận 403',
+    zh: '此账户已禁用 - 请求会转到下一个账户，否则返回 403',
+  },
   'acct.viaProxy': { en: 'via proxy {url}', vi: 'qua proxy {url}', zh: '经代理 {url}' },
   'acct.envLabel': {
     en: 'env (JSON object, empty = inherit gateway default)',

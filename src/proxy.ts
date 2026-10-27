@@ -189,9 +189,19 @@ async function handleRequest(
   // in try/catch, unlike getClientAccountCostSince which returns 0 on error -
   // a DB failure here must become a clean 503, not an unhandled throw.
   const billable = pathname.startsWith('/v1/messages')
+
+  // Collect request body. Read before selection: an account may block the
+  // requested model or effort, so routing needs both.
+  const chunks: Buffer[] = []
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  }
+  let body = Buffer.concat(chunks)
+  const spec = billable && method === 'POST' ? extractRequestSpec(body) : { model: '', effort: '' }
+
   let selected: ReturnType<typeof selectAccountFor>
   try {
-    selected = selectAccountFor(clientName, billable)
+    selected = selectAccountFor(clientName, billable, spec)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     log('error', `Account selection failed for "${clientName}": ${detail}`)
@@ -212,7 +222,7 @@ async function handleRequest(
   }
 
   if (!selected.ok) {
-    const status = selected.reason === 'quota' ? 429 : 503
+    const status = selected.reason === 'quota' ? 429 : selected.reason === 'restricted' ? 403 : 503
     const payload =
       selected.reason === 'quota'
         ? {
@@ -226,6 +236,14 @@ async function handleRequest(
               limit_usd: b.limitUsd,
             })),
           }
+        : selected.reason === 'restricted'
+          ? {
+              error: 'This model or effort level is blocked on every usable account',
+              client: clientName,
+              model: spec.model,
+              effort: spec.effort || undefined,
+              hint: 'Pick another model or a lower effort, or ask the admin to unblock it',
+            }
         : selected.reason === 'no-bindings'
           ? {
               error: 'No upstream account assigned to this client',
@@ -241,13 +259,18 @@ async function handleRequest(
     const detail =
       selected.reason === 'quota'
         ? `cost limit reached on all ${selected.blocked.length} usable account(s)`
+        : selected.reason === 'restricted'
+          ? `blocked model/effort: ${spec.model}${spec.effort ? ` @ ${spec.effort}` : ''}`
         : selected.reason === 'no-bindings'
           ? 'client has no account bindings'
           : 'no usable account'
 
     res.writeHead(status, {
       'Content-Type': 'application/json',
-      'x-ccg-error': selected.reason === 'quota' ? 'cost-limit' : 'no-account',
+      'x-ccg-error':
+        selected.reason === 'quota' ? 'cost-limit'
+        : selected.reason === 'restricted' ? 'model-blocked'
+        : 'no-account',
     })
     res.end(JSON.stringify(payload))
     log('warn', `Client "${clientName}" blocked: ${detail}`)
@@ -271,13 +294,6 @@ async function handleRequest(
   const oauthToken = selected.accessToken
 
   log('info', `Client "${clientName}" → ${method} ${path}`)
-
-  // Collect request body
-  const chunks: Buffer[] = []
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-  }
-  let body = Buffer.concat(chunks)
 
   // Capture a preview of the request's actual last message (human prompt,
   // tool_result payload, classifier text, …) for the dashboard, before rewrite
@@ -695,7 +711,22 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
 // Values inside env/promptEnv must be primitives: they are spread into
 // Config.env, which rewriter.ts reads as string | boolean | number, and a
 // nested object would reach the outgoing request fingerprint unchecked.
-const ACCOUNT_PATCHABLE = ['label', 'email', 'enabled', 'env', 'promptEnv', 'proxyUrl'] as const
+const ACCOUNT_PATCHABLE = [
+  'label', 'email', 'enabled', 'env', 'promptEnv', 'proxyUrl', 'blockedModels', 'blockedEfforts',
+] as const
+
+/** model + output_config.effort of a /v1/messages body; '' where absent or unparsable. */
+export function extractRequestSpec(body: Buffer): { model: string; effort: string } {
+  try {
+    const j = JSON.parse(body.toString('utf-8'))
+    return {
+      model: typeof j?.model === 'string' ? j.model : '',
+      effort: typeof j?.output_config?.effort === 'string' ? j.output_config.effort : '',
+    }
+  } catch {
+    return { model: '', effort: '' }
+  }
+}
 
 /** Account views plus lifetime spend per account (spec 8.1). */
 function accountsWithUsage() {
@@ -725,6 +756,12 @@ export function sanitizeAccountPatch(raw: unknown): Record<string, unknown> {
         }
       }
       out[key] = value
+    } else if (key === 'blockedModels' || key === 'blockedEfforts') {
+      // Stored comma-joined, so a comma inside an entry would split it.
+      if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || v.length > 100)) {
+        throw new Error(`${key} must be an array of strings`)
+      }
+      out[key] = [...new Set(value.map((v) => v.trim().toLowerCase().replace(/,/g, '')).filter(Boolean))]
     } else {
       if (typeof value !== 'string') throw new Error(`${key} must be a string`)
       out[key] = key === 'proxyUrl' ? value.trim() : value

@@ -1,6 +1,8 @@
 // Accounts section of the admin dashboard. Kept out of dashboard.ts so all
 // account UI logic lives in one readable place; dashboard.ts only mounts it.
 
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+
 /** Markup only. Every visible string is resolved in the browser via data-i18n. */
 export function renderAccountsSection(): string {
   return `
@@ -14,9 +16,19 @@ export function renderAccountsSection(): string {
         <button type="submit" class="primary" data-i18n="acct.add">Add account</button>
       </form>
       <div id="acctError" class="error" style="display:none"></div>
+      <div id="acctBulk" style="display:none;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <strong id="acctBulkCount"></strong>
+        <input id="acctBulkModels" style="flex:1;min-width:220px" autocomplete="off" spellcheck="false"
+               data-i18n-ph="acct.blockModelsPh" placeholder="Blocked models, comma-separated" />
+        <span class="meta" data-i18n="acct.blockEfforts">Blocked effort:</span>
+        ${EFFORTS.map((e) => `<label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" class="acct-bulk-effort" value="${e}" />${e}</label>`).join('')}
+        <button type="button" id="acctBulkApply" class="primary" data-i18n="acct.blockApply">Apply to selected</button>
+        <button type="button" id="acctBulkClear" data-i18n="acct.blockClear">Unblock selected</button>
+      </div>
       <div class="scroll-y">
         <table>
           <thead><tr>
+            <th><input type="checkbox" id="acctSelAll" data-i18n-title="acct.selectAll" title="Select all" /></th>
             <th data-i18n="acct.id">ID</th>
             <th data-i18n="acct.label">Label</th>
             <th data-i18n="acct.state">State</th>
@@ -54,6 +66,9 @@ export function accountsScript(): string {
     const edit = {};
     let accounts = [];
     let defaultEmail = '';
+    // Checked account ids for bulk block/unblock; survives re-renders.
+    const selected = new Set();
+    const selAll = document.getElementById('acctSelAll');
 
     const showError = (msg) => {
       const el = document.getElementById('acctError');
@@ -79,7 +94,7 @@ export function accountsScript(): string {
     const loginPanel = (a) => {
       const l = login[a.id];
       if (!l) return '';
-      return '<tr data-id="' + E(a.id) + '"><td colspan="9">'
+      return '<tr data-id="' + E(a.id) + '"><td colspan="10">'
         + '<p class="meta" style="margin:0 0 6px">' + E(T('acct.loginStep1')) + '</p>'
         + '<p style="margin:0 0 8px;word-break:break-all"><a href="' + E(l.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">' + E(l.url) + '</a></p>'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
@@ -102,7 +117,7 @@ export function accountsScript(): string {
         + '<span class="meta">' + E(T(key)) + '</span>'
         + '<textarea class="acct-e" data-f="' + f + '" rows="5" spellcheck="false" style="font-family:var(--mono);font-size:12px"'
         + ' placeholder="{}">' + E(e[f]) + '</textarea></label>';
-      return '<tr data-id="' + E(a.id) + '"><td colspan="9">'
+      return '<tr data-id="' + E(a.id) + '"><td colspan="10">'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
         + field('label', 'acct.label') + field('email', 'acct.email')
         + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
@@ -124,10 +139,17 @@ export function accountsScript(): string {
 
     const render = () => {
       document.getElementById('acctEmpty').style.display = accounts.length ? 'none' : 'block';
+      for (const id of selected) if (!accounts.some((a) => a.id === id)) selected.delete(id);
+      selAll.checked = accounts.length > 0 && selected.size === accounts.length;
+      document.getElementById('acctBulk').style.display = selected.size ? 'flex' : 'none';
+      document.getElementById('acctBulkCount').textContent = T('acct.selected', { n: selected.size });
+      const blocks = (a) => a.blockedModels.concat(a.blockedEfforts.map((e) => 'effort:' + e));
       rowsEl.innerHTML = accounts.map((a) => '<tr data-id="' + E(a.id) + '">'
+        + '<td><input type="checkbox" class="acct-sel"' + (selected.has(a.id) ? ' checked' : '') + ' /></td>'
         + '<td><code>' + E(a.id) + '</code></td>'
         + '<td>' + E(a.label)
           + (a.proxyUrl ? ' <span class="pill warn" title="' + E(T('acct.viaProxy', { url: a.proxyUrl })) + '">proxy</span>' : '')
+          + blocks(a).map((b) => ' <span class="pill err" title="' + E(T('acct.blocked')) + '">' + E(b) + '</span>').join('')
           + '</td>'
         + '<td><span class="pill ' + (PILL[a.state] || 'warn') + '" title="' + E(a.lastError) + '">' + E(stateLabel(a.state)) + '</span></td>'
         + '<td>' + (a.expiresAt ? E(new Date(a.expiresAt).toLocaleString()) : '-') + '</td>'
@@ -249,7 +271,36 @@ export function accountsScript(): string {
       if (l) l.code = ev.target.value;
     });
 
+    selAll.addEventListener('change', () => {
+      selected.clear();
+      if (selAll.checked) accounts.forEach((a) => selected.add(a.id));
+      render();
+    });
+
+    // Replaces each selected account's blocklists; sequential so a failure
+    // names the account it stopped at and the rest stay untouched.
+    const bulkSet = async (blockedModels, blockedEfforts) => {
+      showError('');
+      for (const id of selected) {
+        try { await api(url(id), 'PATCH', { blockedModels, blockedEfforts }); }
+        catch (e) { showError(id + ': ' + e.message); break; }
+      }
+      load();
+    };
+    document.getElementById('acctBulkApply').addEventListener('click', () => {
+      const models = document.getElementById('acctBulkModels').value.split(',').map((m) => m.trim()).filter(Boolean);
+      const efforts = [...document.querySelectorAll('.acct-bulk-effort:checked')].map((c) => c.value);
+      bulkSet(models, efforts);
+    });
+    document.getElementById('acctBulkClear').addEventListener('click', () => bulkSet([], []));
+
     rowsEl.addEventListener('change', async (ev) => {
+      if (ev.target.classList.contains('acct-sel')) {
+        const id = ev.target.closest('tr[data-id]').dataset.id;
+        if (ev.target.checked) selected.add(id); else selected.delete(id);
+        render();
+        return;
+      }
       if (!ev.target.classList.contains('acct-enabled')) return;
       showError('');
       try {

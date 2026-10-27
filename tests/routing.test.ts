@@ -258,6 +258,25 @@ test('cạn hạn mức + account khác đã chết → vẫn là quota, blocked
   assert.equal(blocked[0].accountId, 'sel-mixed-a')
 })
 
+test('account chặn model/effort thì bỏ qua, hết account → restricted', () => {
+  makeLiveAccount('sel-block-a')
+  makeLiveAccount('sel-block-b')
+  updateAccountRow('sel-block-a', { blockedModels: ['opus'], blockedEfforts: ['max'] })
+  updateAccountRow('sel-block-b', { blockedEfforts: ['max'] })
+  insertClientRow({ name: 'sel-block-client', token: 'tok-sel-block' })
+  replaceBindings('sel-block-client', [
+    { accountId: 'sel-block-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+    { accountId: 'sel-block-b', priority: 2, limitUsd: 0, limitPeriod: 'lifetime' },
+  ])
+  const pick = (model: string, effort: string) => selectAccountFor('sel-block-client', true, { model, effort })
+  const opus = pick('claude-opus-4-7', 'high')
+  assert.equal(opus.ok && opus.accountId, 'sel-block-b')
+  const sonnet = pick('claude-sonnet-4-5', '')
+  assert.equal(sonnet.ok && sonnet.accountId, 'sel-block-a')
+  const max = pick('claude-sonnet-4-5', 'MAX')
+  assert.equal(!max.ok && max.reason, 'restricted')
+})
+
 import { reloadClients, lookupToken } from '../src/auth.js'
 
 console.log('\nauth - client nạp từ DB\n')
