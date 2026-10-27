@@ -434,6 +434,7 @@ const M: Record<string, Entry> = {
     zh: '当前：{url}。留空则保持不变。',
   },
   'acct.proxyClear': { en: 'Clear proxy', vi: 'Xóa proxy', zh: '清除代理' },
+  'acct.blockedCol': { en: 'Blocked', vi: 'Chặn', zh: '已禁用' },
   'acct.selectAll': { en: 'Select all', vi: 'Chọn tất cả', zh: '全选' },
   'acct.selected': { en: '{n} selected', vi: 'Đã chọn {n}', zh: '已选 {n} 个' },
   'acct.blockModelsPh': {

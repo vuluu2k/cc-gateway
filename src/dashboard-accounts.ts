@@ -32,6 +32,7 @@ export function renderAccountsSection(): string {
             <th data-i18n="acct.id">ID</th>
             <th data-i18n="acct.label">Label</th>
             <th data-i18n="acct.state">State</th>
+            <th data-i18n="acct.blockedCol">Blocked</th>
             <th data-i18n="acct.expires">Token expires</th>
             <th data-i18n="acct.email">Email</th>
             <th data-i18n="acct.deviceId">Device ID</th>
@@ -94,7 +95,7 @@ export function accountsScript(): string {
     const loginPanel = (a) => {
       const l = login[a.id];
       if (!l) return '';
-      return '<tr data-id="' + E(a.id) + '"><td colspan="10">'
+      return '<tr data-id="' + E(a.id) + '"><td colspan="11">'
         + '<p class="meta" style="margin:0 0 6px">' + E(T('acct.loginStep1')) + '</p>'
         + '<p style="margin:0 0 8px;word-break:break-all"><a href="' + E(l.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">' + E(l.url) + '</a></p>'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
@@ -117,7 +118,7 @@ export function accountsScript(): string {
         + '<span class="meta">' + E(T(key)) + '</span>'
         + '<textarea class="acct-e" data-f="' + f + '" rows="5" spellcheck="false" style="font-family:var(--mono);font-size:12px"'
         + ' placeholder="{}">' + E(e[f]) + '</textarea></label>';
-      return '<tr data-id="' + E(a.id) + '"><td colspan="10">'
+      return '<tr data-id="' + E(a.id) + '"><td colspan="11">'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
         + field('label', 'acct.label') + field('email', 'acct.email')
         + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
@@ -143,15 +144,19 @@ export function accountsScript(): string {
       selAll.checked = accounts.length > 0 && selected.size === accounts.length;
       document.getElementById('acctBulk').style.display = selected.size ? 'flex' : 'none';
       document.getElementById('acctBulkCount').textContent = T('acct.selected', { n: selected.size });
-      const blocks = (a) => a.blockedModels.concat(a.blockedEfforts.map((e) => 'effort:' + e));
+      // One compact pill per account; a pill per entry wrapped the whole row.
+      const blocks = (a) => a.blockedModels
+        .concat(a.blockedEfforts.length ? ['effort ' + a.blockedEfforts.join('/')] : []).join(' · ');
       rowsEl.innerHTML = accounts.map((a) => '<tr data-id="' + E(a.id) + '">'
         + '<td><input type="checkbox" class="acct-sel"' + (selected.has(a.id) ? ' checked' : '') + ' /></td>'
-        + '<td><code>' + E(a.id) + '</code></td>'
+        + '<td style="white-space:nowrap"><code>' + E(a.id) + '</code></td>'
         + '<td>' + E(a.label)
           + (a.proxyUrl ? ' <span class="pill warn" title="' + E(T('acct.viaProxy', { url: a.proxyUrl })) + '">proxy</span>' : '')
-          + blocks(a).map((b) => ' <span class="pill err" title="' + E(T('acct.blocked')) + '">' + E(b) + '</span>').join('')
           + '</td>'
-        + '<td><span class="pill ' + (PILL[a.state] || 'warn') + '" title="' + E(a.lastError) + '">' + E(stateLabel(a.state)) + '</span></td>'
+        + '<td style="white-space:nowrap"><span class="pill ' + (PILL[a.state] || 'warn') + '" title="' + E(a.lastError) + '">' + E(stateLabel(a.state)) + '</span></td>'
+        + '<td style="white-space:nowrap">' + (blocks(a)
+          ? '<span class="pill err" title="' + E(T('acct.blocked')) + '">' + E(blocks(a)) + '</span>'
+          : '<span class="meta">-</span>') + '</td>'
         + '<td>' + (a.expiresAt ? E(new Date(a.expiresAt).toLocaleString()) : '-') + '</td>'
         + '<td>' + E(a.email)
           + (sharedIdentity(a) ? ' <span class="pill warn" title="' + E(T('acct.defaultIdentityHint')) + '">' + E(T('acct.defaultIdentity')) + '</span>' : '')
