@@ -33,7 +33,7 @@ export function overviewCss(): string {
   .all-good { display: flex; align-items: center; gap: 10px; color: var(--ok); font-size: 13px; }
   .all-good::before { content: "✓"; font-weight: 700; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(63,185,80,.15); }
   /* Account cards */
-  .acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .acc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
   .acc { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
   .acc.bad { border-color: rgba(248,81,73,.45); }
   .acc.off { opacity: .6; }
@@ -51,7 +51,8 @@ export function overviewCss(): string {
   .acc .reset { font-size: 11px; color: var(--muted); margin-top: -4px; }
   .acc-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
   .acc-stats b { display: block; font-family: var(--mono); font-size: 15px; }
-  .acc-stats span { font-size: 11px; color: var(--muted); }
+  .acc-stats span { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .acc-stats b em { font-style: normal; font-size: 11px; font-weight: 500; color: var(--err); margin-left: 4px; white-space: nowrap; }
   .acc-actions { display: flex; align-items: center; gap: 8px; }
   .acc-actions .sp { flex: 1; }
   /* On/off switch */
@@ -184,7 +185,7 @@ export function overviewScript(): string {
         + meterRow('5h', w5) + meterRow('7d', w7) + reset
         + '<div class="acc-stats">'
         + '<div><b>' + fmtCost(u.costUsd) + '</b><span>' + esc(t('cc.cost24h')) + '</span></div>'
-        + '<div><b>' + fmtNum(u.requests) + '</b><span>' + esc(t('cc.req24h')) + (u.errors ? ' · <span style="color:var(--err)">' + fmtNum(u.errors) + ' ' + esc(t('cc.err')) + '</span>' : '') + '</span></div>'
+        + '<div><b>' + fmtNum(u.requests) + (u.errors ? '<em>' + fmtNum(u.errors) + ' ' + esc(t('cc.err')) + '</em>' : '') + '</b><span>' + esc(t('cc.req24h')) + '</span></div>'
         + '<div><b>' + nClients + '</b><span>' + esc(t('cc.clientsN')) + '</span></div>'
         + '</div>'
         + '<div class="acc-actions"><label class="switch"><input type="checkbox" data-cc="toggle" data-arg="' + esc(a.id) + '"' + (a.enabled ? ' checked' : '') + ' /><i></i>'

@@ -356,6 +356,8 @@ ${i18nHead()}
     scrollbar-color: #2c333d var(--panel);
     scrollbar-width: thin;
   }
+  /* The log is the whole view: fill the viewport below the toolbar + filters. */
+  @media (min-width: 601px) { #recentScroll { max-height: max(320px, calc(100vh - 210px)); } }
   .scroll-y::-webkit-scrollbar { width: 10px; }
   .scroll-y::-webkit-scrollbar-track { background: var(--panel); }
   .scroll-y::-webkit-scrollbar-thumb { background: #2c333d; border-radius: 6px; border: 2px solid var(--panel); }
@@ -553,7 +555,7 @@ ${i18nHead()}
   <h1 id="pageTitle" data-i18n="admin.nav.overview">Overview</h1>
   <div class="toolbar">
     <span class="meta" id="updated" data-i18n="admin.toolbar.loading">loading…</span>
-    <select id="rangeSel" data-view="overview">
+    <select id="rangeSel" data-view="overview usage">
       <option value="minute" data-i18n="admin.range.minute">Last 60 min</option>
       <option value="hour" data-i18n="admin.range.hour">Last 24 h</option>
     </select>
@@ -567,13 +569,13 @@ ${i18nHead()}
 </header>
 <main>
   <div class="grid">
+    <div class="row" id="topStats" data-view="overview usage"></div>
 ${renderOverviewSection()}
-    <div class="row" id="topStats" data-view="overview"></div>
     <section id="periods" class="card" data-view="usage">
       <h2 data-i18n="admin.sec.periods">Cost &amp; usage by period</h2>
       <div id="periodTable"></div>
     </section>
-    <section id="charts-section" class="card" data-view="overview">
+    <section id="charts-section" class="card" data-view="overview usage">
       <h2 data-i18n="admin.sec.charts">Requests over time (per client)</h2>
       <div id="charts"></div>
     </section>
@@ -590,7 +592,7 @@ ${renderOverviewSection()}
       <div id="clientsTable"></div>
     </section>
     ${renderAccountsSection()}
-    <section id="quota" class="card dtl" data-view="accounts">
+    <section id="quota" class="card" data-view="accounts">
       <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
       <p class="meta dtl" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
         Live 5-hour rolling and weekly usage per upstream subscription account,
@@ -2120,18 +2122,20 @@ ${renderBindingsModal()}
   });
 
   // Sidebar = tabs: the URL hash picks one view, every [data-view] block
-  // outside it is hidden. Unknown/empty hash falls back to the overview.
+  // outside it is hidden (data-view may list several views, space-separated).
+  // Unknown/empty hash falls back to the overview.
   const navLinks = Array.from(document.querySelectorAll('#sideNav a'));
   const showView = () => {
     const views = navLinks.map(a => a.getAttribute('href').slice(1));
     const v = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
-    document.querySelectorAll('[data-view]').forEach(el => { el.hidden = el.dataset.view !== v; });
+    document.querySelectorAll('[data-view]').forEach(el => { el.hidden = !el.dataset.view.split(' ').includes(v); });
     for (const a of navLinks) {
       const on = a.getAttribute('href') === '#' + v;
       a.classList.toggle('active', on);
       if (!on) continue;
       // Keep data-i18n in sync, or applyI18n on DOMContentLoaded resets it to "Overview".
-      const key = a.lastElementChild.getAttribute('data-i18n');
+      // Query by attribute: the overview link may end in a .nav-badge span.
+      const key = a.querySelector('[data-i18n]').getAttribute('data-i18n');
       const title = document.getElementById('pageTitle');
       title.setAttribute('data-i18n', key);
       title.textContent = t(key);
