@@ -523,8 +523,9 @@ case "$1" in
     if [[ -f "$SELF_PATH" && "$SELF_PATH" != */ccg ]]; then
       rm -f "$SELF_PATH" 2>/dev/null && echo "Removed $SELF_PATH"
     fi
-    if grep -q "$ALIAS_TAG" "$RC_FILE" 2>/dev/null; then
-      sed -i.bak "/$ALIAS_TAG/d" "$RC_FILE"
+    # Drop both the hijack alias and the PATH line the quick installer adds.
+    if grep -qE "$ALIAS_TAG|# cc-gateway path" "$RC_FILE" 2>/dev/null; then
+      sed -i.bak -e "/$ALIAS_TAG/d" -e "/# cc-gateway path/d" "$RC_FILE"
       rm -f "\${RC_FILE}.bak"
     fi
     # Also clean up GUI hijack if present
@@ -550,9 +551,9 @@ case "$1" in
     # Reverse the token approval that install / hijack-gui wrote.
     revoke_token
     echo "Removed 'ccg' and cleaned up. Native 'claude' restored."
-    echo "Note: terminals or editors already open may still hold the old"
-    echo "  ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL — reopen them (or run"
-    echo "  'unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL') to fully detach."
+    echo "Note: this script can't touch the shell you ran it from. In THIS terminal run:"
+    echo "    unalias claude 2>/dev/null; unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL"
+    echo "  (or just open a new terminal). VS Code / Cursor: Cmd+Q and reopen."
     exit 0
     ;;
 
@@ -619,6 +620,8 @@ PLIST
         approve_token
         echo "Done. GUI apps (VS Code / Cursor) will route through gateway."
         echo "  Fully Quit and reopen VS Code / Cursor (Cmd+Q, not just close window)."
+        echo "  Open it from Dock/Finder — launchers like Raycast/Alfred keep their old env"
+        echo "  and pass it on; quit & reopen the launcher too if you use one."
         echo "  Undo: ccg release-gui"
         ;;
       Linux)
