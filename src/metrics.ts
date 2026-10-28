@@ -633,7 +633,19 @@ export function getMetricsSnapshot() {
        WHERE ts >= ? GROUP BY client HAVING cost_usd > 0 ORDER BY cost_usd DESC LIMIT 1`,
     )
     .get(now - day) as { client: string; cost_usd: number } | undefined
+  // Per upstream account, last 24h: drives the overview's account cards.
+  const byAccount24h = Object.fromEntries(
+    (db
+      .prepare(
+        `SELECT account_id, COUNT(*) as n, SUM(cost_usd) as cost_usd,
+          SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors
+         FROM request_metrics WHERE ts >= ? AND account_id != '' GROUP BY account_id`,
+      )
+      .all(now - day) as Array<{ account_id: string; n: number; cost_usd: number | null; errors: number }>)
+      .map((r) => [r.account_id, { requests: r.n, costUsd: r.cost_usd || 0, errors: r.errors || 0 }]),
+  )
   const kpis = {
+    byAccount24h,
     last24h: kpiWindow(now - day, now + 1),
     prev24h: kpiWindow(now - 2 * day, now - day),
     topSpender: topSpender ? { client: topSpender.client, costUsd: topSpender.cost_usd } : null,

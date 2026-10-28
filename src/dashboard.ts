@@ -1,6 +1,7 @@
 import { i18nHead, langSwitcher } from './i18n.js'
 import { renderAccountsSection, accountsScript } from './dashboard-accounts.js'
 import { renderBindingsModal, bindingsScript } from './dashboard-bindings.js'
+import { renderOverviewSection, overviewCss, overviewScript } from './dashboard-overview.js'
 import { glassCss } from './glass.js'
 
 export function renderLogin(error?: string, setup = false): string {
@@ -494,6 +495,8 @@ ${i18nHead()}
   }
   .filter-bar .count.active { color: var(--accent); }
 
+  ${overviewCss()}
+
   /* Glass theme (shared). Modals live outside the cards, so blur on .card is safe. */
   ${glassCss('.card, aside.sidebar, header, .modal-box')}
   .card { border-radius: 14px; }
@@ -564,21 +567,8 @@ ${i18nHead()}
 </header>
 <main>
   <div class="grid">
-    <div id="oauthBanner" class="error" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
-      <span id="oauthBannerMsg" style="flex:1;min-width:240px"></span>
-      <button id="oauthBannerBtn" type="button" class="primary" data-i18n="admin.oauth.reloginBtn">Re-login with Claude</button>
-    </div>
+${renderOverviewSection()}
     <div class="row" id="topStats" data-view="overview"></div>
-    <section id="quota" class="card" data-view="overview">
-      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
-      <p class="meta dtl" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
-        Live 5-hour rolling and weekly usage per upstream subscription account,
-        read from Anthropic's response headers on that account's last request.
-      </p>
-      <div id="quotaBody"></div>
-      <h2 class="dtl" style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
-      <div id="sessionModelsTable" class="dtl"></div>
-    </section>
     <section id="periods" class="card" data-view="usage">
       <h2 data-i18n="admin.sec.periods">Cost &amp; usage by period</h2>
       <div id="periodTable"></div>
@@ -600,6 +590,16 @@ ${i18nHead()}
       <div id="clientsTable"></div>
     </section>
     ${renderAccountsSection()}
+    <section id="quota" class="card dtl" data-view="accounts">
+      <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
+      <p class="meta dtl" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
+        Live 5-hour rolling and weekly usage per upstream subscription account,
+        read from Anthropic's response headers on that account's last request.
+      </p>
+      <div id="quotaBody"></div>
+      <h2 class="dtl" style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
+      <div id="sessionModelsTable" class="dtl"></div>
+    </section>
     <section id="recent" class="card" data-view="recent">
       <h2>
         <span data-i18n="admin.sec.recent">Recent requests</span>
@@ -1146,7 +1146,7 @@ ${renderBindingsModal()}
   };
 
   const tickQuotaResets = () => {
-    document.querySelectorAll('#quotaBody .reset[data-reset]').forEach(el => {
+    document.querySelectorAll('.reset[data-reset]').forEach(el => {
       const rm = Number(el.getAttribute('data-reset'));
       if (Number.isFinite(rm)) el.textContent = t('admin.quota.resetIn', { t: fmtCountdown(rm) });
     });
@@ -1646,6 +1646,7 @@ ${renderBindingsModal()}
   };
 
   let currentData = null;
+  let cfgClients = []; // /api/clients: bindings with used/limit, for the overview
 
   const refresh = async () => {
     try {
@@ -1659,7 +1660,9 @@ ${renderBindingsModal()}
         return;
       }
       currentData = await res.json();
-      renderOAuthBanner(currentData.accounts);
+      const cr = await fetch('/api/clients', { cache: 'no-store', credentials: 'same-origin' });
+      if (cr.ok) cfgClients = (await cr.json()).clients || [];
+      renderControl(currentData, cfgClients);
       renderTopStats(currentData);
       renderPeriods(currentData);
       renderCharts(currentData);
@@ -1673,23 +1676,6 @@ ${renderBindingsModal()}
       document.getElementById('updated').textContent = t('admin.toolbar.fetchErr');
     }
   };
-
-  // ── OAuth account health banner ──
-  const renderOAuthBanner = (accounts) => {
-    const banner = document.getElementById('oauthBanner');
-    const expired = (accounts || []).filter((a) => a.state === 'expired');
-    if (!expired.length) {
-      banner.style.display = 'none';
-      return;
-    }
-    document.getElementById('oauthBannerMsg').textContent =
-      t('admin.oauth.someExpired', { names: expired.map((a) => a.label || a.id).join(', ') });
-    banner.style.display = 'flex';
-  };
-  // Re-login happens per account in the Accounts view.
-  document.getElementById('oauthBannerBtn').addEventListener('click', () => {
-    location.hash = '#accounts';
-  });
 
   document.getElementById('refreshBtn').addEventListener('click', refresh);
   document.getElementById('rangeSel').addEventListener('change', () => {
@@ -2155,6 +2141,12 @@ ${renderBindingsModal()}
   };
   window.addEventListener('hashchange', showView);
   showView();
+  // Switch view, then run \`then\` once it is visible (after showView's scroll reset).
+  const goView = (v, then) => {
+    if (location.hash === '#' + v) return then && then();
+    if (then) window.addEventListener('hashchange', then, { once: true });
+    location.hash = '#' + v;
+  };
 
   // Density: compact hides .dtl columns. Remembered per browser; default compact.
   const densityBtn = document.getElementById('densityBtn');
@@ -2169,6 +2161,7 @@ ${renderBindingsModal()}
   setDensity(savedDensity !== 'detail');
   densityBtn.addEventListener('click', () => setDensity(!document.body.classList.contains('compact')));
 
+  ${overviewScript()}
   ${accountsScript()}
   ${bindingsScript()}
 
