@@ -305,7 +305,7 @@ ${i18nHead()}
 
   /* All table containers get horizontal scroll so wide tables stay usable
      on narrow screens without breaking the card layout. */
-  .table-wrap, #periodTable, #modelsTable, #clientsTable, #clientsConfig {
+  .table-wrap, #periodTable, #modelsTable, #sessionModelsTable, #clientsTable, #clientsConfig {
     overflow-x: auto;
     scrollbar-width: thin;
   }
@@ -520,6 +520,14 @@ ${i18nHead()}
   @media (max-width: 600px) {
     #periodTable table, #modelsTable table, #clientsTable table, #clientsConfig table { min-width: 0; }
   }
+
+  /* One view at a time (sidebar = tabs). [hidden] must beat .row/.card display. */
+  [hidden] { display: none !important; }
+  /* Compact density: drop .dtl columns/blocks and tighten rows. Toggled from the toolbar. */
+  body.compact .dtl { display: none !important; }
+  body.compact th, body.compact td { padding: 6px 8px; }
+  body.compact .scroll-y table { min-width: 640px; }
+  @media (max-width: 600px) { body.compact .scroll-y table { min-width: 0; } }
 </style>
 </head>
 <body>
@@ -529,16 +537,12 @@ ${i18nHead()}
     <span class="sub" data-i18n="admin.brand.sub">Request Dashboard</span>
   </div>
   <nav id="sideNav">
-    <a href="#topStats" class="active"><span class="icon">▦</span><span data-i18n="admin.nav.overview">Overview</span></a>
-    <a href="#quota"><span class="icon">◔</span><span data-i18n="admin.nav.quota">Session quota</span></a>
-    <a href="#periods"><span class="icon">$</span><span data-i18n="admin.nav.periods">Cost &amp; periods</span></a>
-    <a href="#charts"><span class="icon">∿</span><span data-i18n="admin.nav.traffic">Traffic</span></a>
-    <a href="#models"><span class="icon">◇</span><span data-i18n="admin.nav.models">By model</span></a>
+    <a href="#overview"><span class="icon">▦</span><span data-i18n="admin.nav.overview">Overview</span></a>
+    <a href="#usage"><span class="icon">$</span><span data-i18n="admin.nav.periods">Cost &amp; usage</span></a>
     <a href="#clients"><span class="icon">◎</span><span data-i18n="admin.nav.clients">Clients</span></a>
     <a href="#accounts"><span class="icon">☰</span><span data-i18n="acct.nav">Accounts</span></a>
     <a href="#recent"><span class="icon">»</span><span data-i18n="admin.nav.recent">Recent requests</span></a>
     <a href="#install"><span class="icon">⤓</span><span data-i18n="admin.nav.install">Install guide</span></a>
-    <a href="#about"><span class="icon">?</span><span data-i18n="admin.nav.about">How to use</span></a>
   </nav>
 </aside>
 <div class="content">
@@ -546,10 +550,11 @@ ${i18nHead()}
   <h1 id="pageTitle" data-i18n="admin.nav.overview">Overview</h1>
   <div class="toolbar">
     <span class="meta" id="updated" data-i18n="admin.toolbar.loading">loading…</span>
-    <select id="rangeSel">
+    <select id="rangeSel" data-view="overview">
       <option value="minute" data-i18n="admin.range.minute">Last 60 min</option>
       <option value="hour" data-i18n="admin.range.hour">Last 24 h</option>
     </select>
+    <button id="densityBtn" type="button"></button>
     <button id="refreshBtn" data-i18n="admin.toolbar.refresh">Refresh</button>
     ${langSwitcher('padding:6px 10px')}
     <form action="/admin/logout" method="post">
@@ -563,30 +568,30 @@ ${i18nHead()}
       <span id="oauthBannerMsg" style="flex:1;min-width:240px"></span>
       <button id="oauthBannerBtn" type="button" class="primary" data-i18n="admin.oauth.reloginBtn">Re-login with Claude</button>
     </div>
-    <div class="row" id="topStats"></div>
-    <section id="quota" class="card">
+    <div class="row" id="topStats" data-view="overview"></div>
+    <section id="quota" class="card" data-view="overview">
       <h2 data-i18n="admin.sec.quota">Session quota · Anthropic accounts</h2>
-      <p class="meta" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
+      <p class="meta dtl" style="margin:-4px 0 12px" data-i18n="admin.quota.note">
         Live 5-hour rolling and weekly usage per upstream subscription account,
         read from Anthropic's response headers on that account's last request.
       </p>
       <div id="quotaBody"></div>
-      <h2 style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
-      <div id="sessionModelsTable"></div>
+      <h2 class="dtl" style="margin-top:18px" data-i18n="admin.sec.sessionModels">Models used this session (5h)</h2>
+      <div id="sessionModelsTable" class="dtl"></div>
     </section>
-    <section id="periods" class="card">
+    <section id="periods" class="card" data-view="usage">
       <h2 data-i18n="admin.sec.periods">Cost &amp; usage by period</h2>
       <div id="periodTable"></div>
     </section>
-    <section id="charts-section" class="card">
+    <section id="charts-section" class="card" data-view="overview">
       <h2 data-i18n="admin.sec.charts">Requests over time (per client)</h2>
       <div id="charts"></div>
     </section>
-    <section id="models" class="card">
+    <section id="models" class="card" data-view="usage">
       <h2 data-i18n="admin.sec.models">By model</h2>
       <div id="modelsTable"></div>
     </section>
-    <section id="clients" class="card">
+    <section id="clients" class="card" data-view="clients">
       <h2>
         <span data-i18n="admin.sec.clients">Clients</span>
         <button id="addClientBtn" style="float:right;margin-top:-4px" data-i18n="admin.addClient">+ Add client</button>
@@ -595,7 +600,7 @@ ${i18nHead()}
       <div id="clientsTable"></div>
     </section>
     ${renderAccountsSection()}
-    <section id="recent" class="card">
+    <section id="recent" class="card" data-view="recent">
       <h2>
         <span data-i18n="admin.sec.recent">Recent requests</span>
         <span id="pauseHint" class="meta" style="float:right;font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:var(--muted)"></span>
@@ -624,7 +629,7 @@ ${i18nHead()}
       </div>
       <div id="recentTable"></div>
     </section>
-    <section id="install" class="card">
+    <section id="install" class="card" data-view="install">
       <h2 data-i18n="admin.sec.install">Install guide</h2>
       <p class="meta" style="margin:0 0 12px" data-i18n="admin.install.reference">
         Reference copy of the steps shown in the "Client created" panel — kept on the page so you can
@@ -698,7 +703,7 @@ ${i18nHead()}
         Need a fresh launcher file? Use <strong>Re-download</strong> next to the client above.
       </p>
     </section>
-    <details id="about" class="card">
+    <details id="about" class="card" data-view="install">
       <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em" data-i18n="admin.about.summary">
         How to use this dashboard
       </summary>
@@ -961,16 +966,16 @@ ${renderBindingsModal()}
     const top = k.topSpender;
     const tiles = [
       { label: t('admin.kpi.cost24h'), value: fmtCost(cur.costUsd || 0), sub: fmtDelta(cur.costUsd, prev.costUsd) },
-      { label: t('admin.kpi.projected'), value: fmtCost((p7.costUsd / 7) * 30), sub: t('admin.kpi.projectedSub', { cost: fmtCost(p7.costUsd) }) },
+      { cls: 'dtl', label: t('admin.kpi.projected'), value: fmtCost((p7.costUsd / 7) * 30), sub: t('admin.kpi.projectedSub', { cost: fmtCost(p7.costUsd) }) },
       { label: t('admin.kpi.requests24h'), value: fmtNum(cur.total || 0), sub: fmtDelta(cur.total, prev.total) },
-      { label: t('admin.kpi.activeClients'), value: fmtNum(cur.activeClients || 0) + ' / ' + fmtNum(data.clients.length), sub: t('admin.kpi.activeClientsSub') },
+      { cls: 'dtl', label: t('admin.kpi.activeClients'), value: fmtNum(cur.activeClients || 0) + ' / ' + fmtNum(data.clients.length), sub: t('admin.kpi.activeClientsSub') },
       {
         label: t('admin.kpi.errorRate'), value: errPct.toFixed(1) + '%',
         cls: errPct >= 5 ? 'err' : errPct >= 1 ? 'warn' : '',
         sub: t('admin.kpi.errorSub', { up: fmtNum(cur.upstreamErrors || 0), gw: fmtNum(cur.gatewayErrors || 0) }),
       },
       {
-        label: t('admin.kpi.cacheHit'), value: hitPct == null ? '—' : hitPct + '%',
+        cls: 'dtl', label: t('admin.kpi.cacheHit'), value: hitPct == null ? '—' : hitPct + '%',
         sub: t('admin.kpi.cacheHitSub', { tokens: fmtTokens(cur.cacheReadTokens || 0) }),
       },
       {
@@ -981,7 +986,7 @@ ${renderBindingsModal()}
           : t('admin.kpi.quotaNone'),
       },
       {
-        label: t('admin.kpi.topSpender'), value: top ? esc(top.client) : '—',
+        cls: 'dtl', label: t('admin.kpi.topSpender'), value: top ? esc(top.client) : '—',
         sub: top ? fmtCost(top.costUsd) + ' · ' + Math.round((top.costUsd / (cur.costUsd || 1)) * 100) + '%' : '',
       },
     ];
@@ -1008,9 +1013,9 @@ ${renderBindingsModal()}
     const rows = periods.map(p => \`<tr>
       <td data-label=""><strong>\${p.label}</strong></td>
       <td class="num" data-label="\${esc(t('th.calls'))}">\${fmtNum(p.total)}</td>
-      <td class="num" data-label="\${esc(t('th.input'))}" title="\${fmtNum(p.inputTokens)} tokens">\${fmtTokens(p.inputTokens)}</td>
-      <td class="num" data-label="\${esc(t('th.output'))}" title="\${fmtNum(p.outputTokens)} tokens">\${fmtTokens(p.outputTokens)}</td>
-      <td class="num" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(p.cacheReadTokens)} · cache write \${fmtNum(p.cacheCreationTokens)}">\${fmtTokens((p.cacheReadTokens || 0) + (p.cacheCreationTokens || 0))}</td>
+      <td class="num dtl" data-label="\${esc(t('th.input'))}" title="\${fmtNum(p.inputTokens)} tokens">\${fmtTokens(p.inputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.output'))}" title="\${fmtNum(p.outputTokens)} tokens">\${fmtTokens(p.outputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(p.cacheReadTokens)} · cache write \${fmtNum(p.cacheCreationTokens)}">\${fmtTokens((p.cacheReadTokens || 0) + (p.cacheCreationTokens || 0))}</td>
       <td class="num" data-label="\${esc(t('th.errors'))}">\${fmtNum(p.errors || 0)}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(p.costUsd)}</strong></td>
     </tr>\`).join('');
@@ -1019,9 +1024,9 @@ ${renderBindingsModal()}
         <thead><tr>
           <th>\${esc(t('th.period'))}</th>
           <th class="num">\${esc(t('th.calls'))}</th>
-          <th class="num">\${esc(t('th.input'))}</th>
-          <th class="num">\${esc(t('th.output'))}</th>
-          <th class="num">\${esc(t('th.cache'))}</th>
+          <th class="num dtl">\${esc(t('th.input'))}</th>
+          <th class="num dtl">\${esc(t('th.output'))}</th>
+          <th class="num dtl">\${esc(t('th.cache'))}</th>
           <th class="num">\${esc(t('th.errors'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
@@ -1038,10 +1043,10 @@ ${renderBindingsModal()}
     const rows = data.models.map(m => \`<tr>
       <td data-label=""><strong>\${shortModel(m.model)}</strong></td>
       <td class="num" data-label="\${esc(t('th.calls'))}">\${fmtNum(m.total)}</td>
-      <td class="num" data-label="\${esc(t('th.input'))}">\${fmtTokens(m.inputTokens)}</td>
-      <td class="num" data-label="\${esc(t('th.output'))}">\${fmtTokens(m.outputTokens)}</td>
-      <td class="num" data-label="\${esc(t('admin.stat.cacheRead'))}">\${fmtTokens(m.cacheReadTokens)}</td>
-      <td class="num" data-label="\${esc(t('admin.stat.cacheWrite'))}">\${fmtTokens(m.cacheCreationTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.input'))}">\${fmtTokens(m.inputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.output'))}">\${fmtTokens(m.outputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('admin.stat.cacheRead'))}">\${fmtTokens(m.cacheReadTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('admin.stat.cacheWrite'))}">\${fmtTokens(m.cacheCreationTokens)}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(m.costUsd)}</strong></td>
     </tr>\`).join('');
     el.innerHTML = \`
@@ -1049,10 +1054,10 @@ ${renderBindingsModal()}
         <thead><tr>
           <th>\${esc(t('th.model'))}</th>
           <th class="num">\${esc(t('th.calls'))}</th>
-          <th class="num">\${esc(t('th.input'))}</th>
-          <th class="num">\${esc(t('th.output'))}</th>
-          <th class="num">\${esc(t('admin.stat.cacheRead'))}</th>
-          <th class="num">\${esc(t('admin.stat.cacheWrite'))}</th>
+          <th class="num dtl">\${esc(t('th.input'))}</th>
+          <th class="num dtl">\${esc(t('th.output'))}</th>
+          <th class="num dtl">\${esc(t('admin.stat.cacheRead'))}</th>
+          <th class="num dtl">\${esc(t('admin.stat.cacheWrite'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
         <tbody>\${rows}</tbody>
@@ -1134,7 +1139,7 @@ ${renderBindingsModal()}
     const rawRows = Object.keys(q.raw || {}).sort().map(k =>
       '<tr><td>' + esc(k) + '</td><td class="num">' + esc(q.raw[k]) + '</td></tr>').join('');
     const raw = rawRows
-      ? \`<details class="quota-raw"><summary>\${esc(t('admin.quota.rawSummary'))}</summary>
+      ? \`<details class="quota-raw dtl"><summary>\${esc(t('admin.quota.rawSummary'))}</summary>
           <table><tbody>\${rawRows}</tbody></table></details>\`
       : '';
     return '<div class="quota-grid">' + cards + '</div>' + raw;
@@ -1156,10 +1161,10 @@ ${renderBindingsModal()}
     const rows = data.sessionModels.map(m => \`<tr>
       <td data-label=""><strong>\${shortModel(m.model)}</strong></td>
       <td class="num" data-label="\${esc(t('th.calls'))}">\${fmtNum(m.total)}</td>
-      <td class="num" data-label="\${esc(t('th.input'))}">\${fmtTokens(m.inputTokens)}</td>
-      <td class="num" data-label="\${esc(t('th.output'))}">\${fmtTokens(m.outputTokens)}</td>
-      <td class="num" data-label="\${esc(t('admin.stat.cacheRead'))}">\${fmtTokens(m.cacheReadTokens)}</td>
-      <td class="num" data-label="\${esc(t('admin.stat.cacheWrite'))}">\${fmtTokens(m.cacheCreationTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.input'))}">\${fmtTokens(m.inputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('th.output'))}">\${fmtTokens(m.outputTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('admin.stat.cacheRead'))}">\${fmtTokens(m.cacheReadTokens)}</td>
+      <td class="num dtl" data-label="\${esc(t('admin.stat.cacheWrite'))}">\${fmtTokens(m.cacheCreationTokens)}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(m.costUsd)}</strong></td>
     </tr>\`).join('');
     el.innerHTML = \`
@@ -1167,10 +1172,10 @@ ${renderBindingsModal()}
         <thead><tr>
           <th>\${esc(t('th.model'))}</th>
           <th class="num">\${esc(t('th.calls'))}</th>
-          <th class="num">\${esc(t('th.input'))}</th>
-          <th class="num">\${esc(t('th.output'))}</th>
-          <th class="num">\${esc(t('admin.stat.cacheRead'))}</th>
-          <th class="num">\${esc(t('admin.stat.cacheWrite'))}</th>
+          <th class="num dtl">\${esc(t('th.input'))}</th>
+          <th class="num dtl">\${esc(t('th.output'))}</th>
+          <th class="num dtl">\${esc(t('admin.stat.cacheRead'))}</th>
+          <th class="num dtl">\${esc(t('admin.stat.cacheWrite'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
         <tbody>\${rows}</tbody>
@@ -1340,12 +1345,12 @@ ${renderBindingsModal()}
       return \`<tr>
         <td data-label=""><strong>\${c.name}</strong></td>
         <td class="num" data-label="\${esc(t('th.calls'))}">\${fmtNum(c.total)}</td>
-        <td class="num" data-label="\${esc(t('th.input'))}" title="\${fmtNum(c.inputTokens)} tokens">\${fmtTokens(c.inputTokens)}</td>
-        <td class="num" data-label="\${esc(t('th.output'))}" title="\${fmtNum(c.outputTokens)} tokens">\${fmtTokens(c.outputTokens)}</td>
-        <td class="num" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(c.cacheReadTokens)} · cache write \${fmtNum(c.cacheCreationTokens)}">\${fmtTokens((c.cacheReadTokens || 0) + (c.cacheCreationTokens || 0))}</td>
+        <td class="num dtl" data-label="\${esc(t('th.input'))}" title="\${fmtNum(c.inputTokens)} tokens">\${fmtTokens(c.inputTokens)}</td>
+        <td class="num dtl" data-label="\${esc(t('th.output'))}" title="\${fmtNum(c.outputTokens)} tokens">\${fmtTokens(c.outputTokens)}</td>
+        <td class="num dtl" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(c.cacheReadTokens)} · cache write \${fmtNum(c.cacheCreationTokens)}">\${fmtTokens((c.cacheReadTokens || 0) + (c.cacheCreationTokens || 0))}</td>
         <td class="num" data-label="\${esc(t('th.cost'))}"><strong>\${fmtCost(c.costUsd)}</strong></td>
         <td data-label="\${esc(t('th.statusGroup'))}"><span class="pill ok">\${s.ok}</span> <span class="pill warn">\${s.warn}</span> <span class="pill err">\${s.err}</span></td>
-        <td class="num" data-label="\${esc(t('th.avg'))}">\${c.avgDurationMs}ms</td>
+        <td class="num dtl" data-label="\${esc(t('th.avg'))}">\${c.avgDurationMs}ms</td>
         <td class="ago" data-label="\${esc(t('th.lastSeen'))}">\${fmtAgo(c.lastSeen)}</td>
       </tr>\`;
     }).join('');
@@ -1354,12 +1359,12 @@ ${renderBindingsModal()}
         <thead><tr>
           <th>\${esc(t('th.client'))}</th>
           <th class="num">\${esc(t('th.calls'))}</th>
-          <th class="num" title="\${esc(t('admin.tip.inputTokens'))}">\${esc(t('th.input'))}</th>
-          <th class="num" title="\${esc(t('admin.tip.outputTokens'))}">\${esc(t('th.output'))}</th>
-          <th class="num" title="\${esc(t('admin.tip.cacheTokens'))}">\${esc(t('th.cache'))}</th>
+          <th class="num dtl" title="\${esc(t('admin.tip.inputTokens'))}">\${esc(t('th.input'))}</th>
+          <th class="num dtl" title="\${esc(t('admin.tip.outputTokens'))}">\${esc(t('th.output'))}</th>
+          <th class="num dtl" title="\${esc(t('admin.tip.cacheTokens'))}">\${esc(t('th.cache'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
           <th>\${esc(t('th.statusGroup'))}</th>
-          <th class="num">\${esc(t('th.avg'))}</th>
+          <th class="num dtl">\${esc(t('th.avg'))}</th>
           <th>\${esc(t('th.lastSeen'))}</th>
         </tr></thead>
         <tbody>\${rows}</tbody>
@@ -1372,16 +1377,16 @@ ${renderBindingsModal()}
         <thead><tr>
           <th>\${esc(t('th.when'))}</th>
           <th>\${esc(t('th.client'))}</th>
-          <th>\${esc(t('admin.acctColumn'))}</th>
+          <th class="dtl">\${esc(t('admin.acctColumn'))}</th>
           <th>\${esc(t('th.model'))}</th>
           <th>\${esc(t('th.message'))}</th>
-          <th>\${esc(t('th.path'))}</th>
+          <th class="dtl">\${esc(t('th.path'))}</th>
           <th>\${esc(t('th.status'))}</th>
-          <th>\${esc(t('th.errorSource'))}</th>
+          <th class="dtl">\${esc(t('th.errorSource'))}</th>
           <th class="num">\${esc(t('th.duration'))}</th>
-          <th class="num">\${esc(t('th.input'))}</th>
-          <th class="num">\${esc(t('th.output'))}</th>
-          <th class="num">\${esc(t('th.cache'))}</th>
+          <th class="num dtl">\${esc(t('th.input'))}</th>
+          <th class="num dtl">\${esc(t('th.output'))}</th>
+          <th class="num dtl">\${esc(t('th.cache'))}</th>
           <th class="num">\${esc(t('th.cost'))}</th>
         </tr></thead>
         <tbody id="recentBody"></tbody>
@@ -1399,23 +1404,23 @@ ${renderBindingsModal()}
     // limit, oauth, unreachable upstream), 'upstream' = relayed from the Claude
     // API. Hover shows the decoded error payload.
     const srcCell = r.errorSource
-      ? \`<td data-label="\${esc(t('th.errorSource'))}" title="\${esc(r.errorDetail || '')}"><span class="pill \${r.errorSource === 'gateway' ? 'warn' : 'err'}">\${esc(r.errorSource)}</span></td>\`
-      : '<td class="empty" data-label="' + esc(t('th.errorSource')) + '">—</td>';
+      ? \`<td class="dtl" data-label="\${esc(t('th.errorSource'))}" title="\${esc(r.errorDetail || '')}"><span class="pill \${r.errorSource === 'gateway' ? 'warn' : 'err'}">\${esc(r.errorSource)}</span></td>\`
+      : '<td class="empty dtl" data-label="' + esc(t('th.errorSource')) + '">—</td>';
     const tr = document.createElement('tr');
     tr.dataset.ts = String(r.ts);
     tr.innerHTML = \`
       <td class="ago" data-ts="\${r.ts}" data-label="">\${fmtAgo(r.ts)}</td>
       <td data-label="\${esc(t('th.client'))}">\${esc(r.client)}</td>
-      <td data-label="\${esc(t('admin.acctColumn'))}">\${r.accountId ? '<code>' + esc(r.accountId) + '</code>' : '<span class="meta">—</span>'}</td>
+      <td class="dtl" data-label="\${esc(t('admin.acctColumn'))}">\${r.accountId ? '<code>' + esc(r.accountId) + '</code>' : '<span class="meta">—</span>'}</td>
       <td data-label="\${esc(t('th.model'))}"><span class="meta">\${esc(shortModel(r.model))}</span></td>
       \${msgCell}
-      <td class="path" data-label="\${esc(t('th.path'))}" title="\${esc(r.method + ' ' + r.path)}">\${esc(r.path)}</td>
+      <td class="path dtl" data-label="\${esc(t('th.path'))}" title="\${esc(r.method + ' ' + r.path)}">\${esc(r.path)}</td>
       <td data-label="\${esc(t('th.status'))}"><span class="pill \${cls}">\${r.status}</span></td>
       \${srcCell}
       <td class="num" data-label="\${esc(t('th.duration'))}">\${r.durationMs}ms</td>
-      <td class="num" data-label="\${esc(t('th.input'))}" title="\${fmtNum(r.inputTokens)} input tokens">\${hasUsage ? fmtTokens(r.inputTokens) : '—'}</td>
-      <td class="num" data-label="\${esc(t('th.output'))}" title="\${fmtNum(r.outputTokens)} output tokens">\${hasUsage ? fmtTokens(r.outputTokens) : '—'}</td>
-      <td class="num" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(r.cacheReadTokens)} · cache write \${fmtNum(r.cacheCreationTokens)}">\${hasUsage ? fmtTokens((r.cacheReadTokens || 0) + (r.cacheCreationTokens || 0)) : '—'}</td>
+      <td class="num dtl" data-label="\${esc(t('th.input'))}" title="\${fmtNum(r.inputTokens)} input tokens">\${hasUsage ? fmtTokens(r.inputTokens) : '—'}</td>
+      <td class="num dtl" data-label="\${esc(t('th.output'))}" title="\${fmtNum(r.outputTokens)} output tokens">\${hasUsage ? fmtTokens(r.outputTokens) : '—'}</td>
+      <td class="num dtl" data-label="\${esc(t('th.cache'))}" title="cache read \${fmtNum(r.cacheReadTokens)} · cache write \${fmtNum(r.cacheCreationTokens)}">\${hasUsage ? fmtTokens((r.cacheReadTokens || 0) + (r.cacheCreationTokens || 0)) : '—'}</td>
       <td class="num" data-label="\${esc(t('th.cost'))}">\${r.costUsd ? fmtCost(r.costUsd) : '—'}</td>\`;
     return tr;
   };
@@ -1681,9 +1686,9 @@ ${renderBindingsModal()}
       t('admin.oauth.someExpired', { names: expired.map((a) => a.label || a.id).join(', ') });
     banner.style.display = 'flex';
   };
-  // Re-login happens per account in the Accounts section.
+  // Re-login happens per account in the Accounts view.
   document.getElementById('oauthBannerBtn').addEventListener('click', () => {
-    document.getElementById('accounts').scrollIntoView({ behavior: 'smooth' });
+    location.hash = '#accounts';
   });
 
   document.getElementById('refreshBtn').addEventListener('click', refresh);
@@ -1741,8 +1746,8 @@ ${renderBindingsModal()}
     const rows = clients.map(c => \`
       <tr>
         <td data-label=""><strong>\${esc(c.name)}</strong></td>
-        <td data-label="\${esc(t('th.token'))}"><code class="config-info">\${esc(c.token_preview)}</code></td>
-        <td data-label="\${esc(t('th.workdir'))}">\${c.home_dir
+        <td class="dtl" data-label="\${esc(t('th.token'))}"><code class="config-info">\${esc(c.token_preview)}</code></td>
+        <td class="dtl" data-label="\${esc(t('th.workdir'))}">\${c.home_dir
           ? '<code class="config-info">' + esc(c.home_dir) + '</code>'
           : '<span class="meta">' + esc(t('admin.client.workdirAuto')) + '</span>'}</td>
         <td data-label="\${esc(t('th.accounts'))}"><div class="acct-list">\${(c.bindings || []).length
@@ -1766,7 +1771,7 @@ ${renderBindingsModal()}
       </tr>\`).join('');
     el.innerHTML = \`
       <table>
-        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th>\${esc(t('th.token'))}</th><th>\${esc(t('th.workdir'))}</th><th>\${esc(t('th.accounts'))}</th><th></th></tr></thead>
+        <thead><tr><th>\${esc(t('th.configuredClient'))}</th><th class="dtl">\${esc(t('th.token'))}</th><th class="dtl">\${esc(t('th.workdir'))}</th><th>\${esc(t('th.accounts'))}</th><th></th></tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
     el.querySelectorAll('[data-edit-workdir]').forEach(btn => {
@@ -2128,47 +2133,41 @@ ${renderBindingsModal()}
     if (e.target.id === 'regenModal') closeRegenModal();
   });
 
-  // Sidebar nav: highlight the section currently in view and keep page title
-  // in sync. Uses IntersectionObserver — much cheaper than scroll listeners.
-  const sectionToTitle = {
-    'topStats': 'admin.nav.overview',
-    'quota': 'admin.nav.quota',
-    'periods': 'admin.nav.periods',
-    'charts-section': 'admin.nav.traffic',
-    'models': 'admin.nav.models',
-    'clients': 'admin.nav.clients',
-    'accounts': 'acct.nav',
-    'recent': 'admin.nav.recent',
-    'install': 'admin.nav.install',
-    'about': 'admin.nav.about',
-  };
+  // Sidebar = tabs: the URL hash picks one view, every [data-view] block
+  // outside it is hidden. Unknown/empty hash falls back to the overview.
   const navLinks = Array.from(document.querySelectorAll('#sideNav a'));
-  const setActive = (id) => {
+  const showView = () => {
+    const views = navLinks.map(a => a.getAttribute('href').slice(1));
+    const v = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+    document.querySelectorAll('[data-view]').forEach(el => { el.hidden = el.dataset.view !== v; });
     for (const a of navLinks) {
-      const target = a.getAttribute('href').slice(1);
-      const matchTarget = target === 'charts' ? 'charts-section' : target;
-      a.classList.toggle('active', matchTarget === id);
+      const on = a.getAttribute('href') === '#' + v;
+      a.classList.toggle('active', on);
+      if (!on) continue;
+      // Keep data-i18n in sync, or applyI18n on DOMContentLoaded resets it to "Overview".
+      const key = a.lastElementChild.getAttribute('data-i18n');
+      const title = document.getElementById('pageTitle');
+      title.setAttribute('data-i18n', key);
+      title.textContent = t(key);
     }
-    const title = document.getElementById('pageTitle');
-    if (title && sectionToTitle[id]) title.textContent = t(sectionToTitle[id]);
+    window.scrollTo(0, 0);
+    if (currentData) renderCharts(currentData); // chart width is 0 while hidden
   };
-  const observed = ['topStats', 'quota', 'periods', 'charts-section', 'models', 'clients', 'accounts', 'recent', 'install', 'about']
-    .map(id => document.getElementById(id))
-    .filter(Boolean);
-  if ('IntersectionObserver' in window) {
-    const visible = new Map();
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        visible.set(e.target.id, e.intersectionRatio);
-      }
-      let bestId = null, bestRatio = 0;
-      for (const [id, ratio] of visible) {
-        if (ratio > bestRatio) { bestRatio = ratio; bestId = id; }
-      }
-      if (bestId) setActive(bestId);
-    }, { rootMargin: '-80px 0px -50% 0px', threshold: [0, 0.1, 0.5, 1] });
-    for (const el of observed) io.observe(el);
-  }
+  window.addEventListener('hashchange', showView);
+  showView();
+
+  // Density: compact hides .dtl columns. Remembered per browser; default compact.
+  const densityBtn = document.getElementById('densityBtn');
+  const setDensity = (compact) => {
+    document.body.classList.toggle('compact', compact);
+    densityBtn.textContent = t(compact ? 'admin.density.showDetail' : 'admin.density.showCompact');
+    densityBtn.setAttribute('aria-pressed', String(!compact));
+    try { localStorage.setItem('ccg_density', compact ? 'compact' : 'detail'); } catch (e) {}
+  };
+  let savedDensity = null;
+  try { savedDensity = localStorage.getItem('ccg_density'); } catch (e) {}
+  setDensity(savedDensity !== 'detail');
+  densityBtn.addEventListener('click', () => setDensity(!document.body.classList.contains('compact')));
 
   ${accountsScript()}
   ${bindingsScript()}

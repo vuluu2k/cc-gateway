@@ -6,7 +6,7 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Markup only. Every visible string is resolved in the browser via data-i18n. */
 export function renderAccountsSection(): string {
   return `
-    <section id="accounts" class="card">
+    <section id="accounts" class="card" data-view="accounts">
       <h2 data-i18n="acct.title">Upstream accounts</h2>
       <form id="acctAdd" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <input name="id" required maxlength="64"
@@ -33,9 +33,9 @@ export function renderAccountsSection(): string {
             <th data-i18n="acct.label">Label</th>
             <th data-i18n="acct.state">State</th>
             <th data-i18n="acct.blockedCol">Blocked</th>
-            <th data-i18n="acct.expires">Token expires</th>
-            <th data-i18n="acct.email">Email</th>
-            <th data-i18n="acct.deviceId">Device ID</th>
+            <th class="dtl" data-i18n="acct.expires">Token expires</th>
+            <th class="dtl" data-i18n="acct.email">Email</th>
+            <th class="dtl" data-i18n="acct.deviceId">Device ID</th>
             <th class="num" data-i18n="acct.usage">Usage</th>
             <th data-i18n="acct.enabled">Enabled</th>
             <th></th>
@@ -157,11 +157,11 @@ export function accountsScript(): string {
         + '<td style="white-space:nowrap">' + (blocks(a)
           ? '<span class="pill err" title="' + E(T('acct.blocked')) + '">' + E(blocks(a)) + '</span>'
           : '<span class="meta">-</span>') + '</td>'
-        + '<td>' + (a.expiresAt ? E(new Date(a.expiresAt).toLocaleString()) : '-') + '</td>'
-        + '<td>' + E(a.email)
+        + '<td class="dtl">' + (a.expiresAt ? E(new Date(a.expiresAt).toLocaleString()) : '-') + '</td>'
+        + '<td class="dtl">' + E(a.email)
           + (sharedIdentity(a) ? ' <span class="pill warn" title="' + E(T('acct.defaultIdentityHint')) + '">' + E(T('acct.defaultIdentity')) + '</span>' : '')
           + '</td>'
-        + '<td><code title="' + E(a.deviceId) + '">' + E(String(a.deviceId).slice(0, 8)) + '...</code></td>'
+        + '<td class="dtl"><code title="' + E(a.deviceId) + '">' + E(String(a.deviceId).slice(0, 8)) + '...</code></td>'
         + '<td class="num" title="' + E(T('acct.usageRequests', { n: a.usage ? a.usage.requests : 0 })) + '">'
           + E(fmtCost(a.usage ? a.usage.costUsd : 0)) + '</td>'
         + '<td><input type="checkbox" class="acct-enabled"' + (a.enabled ? ' checked' : '') + ' /></td>'
