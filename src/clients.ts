@@ -461,6 +461,24 @@ if ch:
   return 0
 }
 
+# macOS apps get their env once, at launch, from whatever launched them. A
+# launcher started before a launchctl change (Raycast, Alfred) keeps the old
+# ANTHROPIC_BASE_URL and hands it to every editor it opens, so restart any
+# launcher whose value differs from launchd's.
+refresh_launchers() {
+  WANT="$(launchctl getenv ANTHROPIC_BASE_URL)"
+  for SPEC in "Raycast:com.raycast.macos" "Alfred:com.runningwithcrayons.Alfred"; do
+    NAME="\${SPEC%%:*}"; BUNDLE="\${SPEC#*:}"
+    PID=$(pgrep -x "$NAME" | head -1)
+    [[ -n "$PID" ]] || continue
+    HAVE=$(ps eww -o command= -p "$PID" | grep -o 'ANTHROPIC_BASE_URL=[^ ]*' | cut -d= -f2-)
+    [[ "$HAVE" == "$WANT" ]] && continue
+    osascript -e "quit app id \\"$BUNDLE\\"" >/dev/null 2>&1
+    for _ in 1 2 3 4 5; do pgrep -x "$NAME" >/dev/null || break; sleep 1; done
+    open -b "$BUNDLE" && echo "  Restarted $NAME so apps it opens pick up the change."
+  done
+}
+
 # ── Subcommands ──
 
 case "$1" in
@@ -543,6 +561,7 @@ case "$1" in
         # release-gui, which has always unset these unconditionally.
         launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
         launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
+        refresh_launchers
         ;;
       Linux)
         rm -f "\${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/ccg.conf"
@@ -553,7 +572,8 @@ case "$1" in
     echo "Removed 'ccg' and cleaned up. Native 'claude' restored."
     echo "Note: this script can't touch the shell you ran it from. In THIS terminal run:"
     echo "    unalias claude 2>/dev/null; unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL"
-    echo "  (or just open a new terminal). VS Code / Cursor: Cmd+Q and reopen."
+    echo "  (or just open a new terminal). VS Code / Cursor: fully quit and reopen"
+    echo "  (Linux: log out and back in to drop the GUI env)."
     exit 0
     ;;
 
@@ -617,11 +637,11 @@ PLIST
         launchctl load "$PLIST_PATH"
         launchctl setenv ANTHROPIC_API_KEY "$CLIENT_TOKEN"
         launchctl setenv ANTHROPIC_BASE_URL "$GATEWAY_URL"
+        refresh_launchers
         approve_token
         echo "Done. GUI apps (VS Code / Cursor) will route through gateway."
         echo "  Fully Quit and reopen VS Code / Cursor (Cmd+Q, not just close window)."
-        echo "  Open it from Dock/Finder — launchers like Raycast/Alfred keep their old env"
-        echo "  and pass it on; quit & reopen the launcher too if you use one."
+        echo "  Other launchers holding an old env: quit & reopen them too, or open from Dock."
         echo "  Undo: ccg release-gui"
         ;;
       Linux)
@@ -656,6 +676,7 @@ ENVCONF
         fi
         launchctl unsetenv ANTHROPIC_API_KEY 2>/dev/null
         launchctl unsetenv ANTHROPIC_BASE_URL 2>/dev/null
+        refresh_launchers
         echo "Done. GUI env vars removed. Restart VS Code / Cursor."
         ;;
       Linux)
