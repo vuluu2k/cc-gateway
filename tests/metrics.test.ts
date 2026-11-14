@@ -3,7 +3,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { strict as assert } from 'assert'
 import { initDb } from '../src/db.js'
-import { recordRequest, getMetricsSnapshot } from '../src/metrics.js'
+import { recordRequest, getMetricsSnapshot, pruneOldRows } from '../src/metrics.js'
+import { getDb } from '../src/db.js'
 
 initDb(join(mkdtempSync(join(tmpdir(), 'ccg-test-')), 'test.db'))
 
@@ -34,4 +35,23 @@ assert.equal(periods.find((p) => p.key === 'today')?.errors, 1)
 // per account, last 24h only: pro-2's request is 30h old
 assert.deepEqual(kpis.byAccount24h, { 'pro-1': { requests: 2, costUsd: 3, errors: 1 } })
 
-console.log('metrics kpis: 12 passed, 0 failed')
+// pruneOldRows: rows > 30d go, prompt text > 7d is blanked, orphan portal rows go (only once clients exist)
+const D = 24 * H
+const db = getDb()
+const run = (sql: string, ...a: unknown[]) => db.prepare(sql).run(...a)
+req(now - 31 * D, 'old', { userMessage: 'x' })
+req(now - 8 * D, 'dave', { userMessage: 'secret prompt', errorDetail: 'e', costUsd: 5 })
+req(now - D, 'dave', { userMessage: 'fresh' })
+run(`INSERT INTO client_credentials (client_name, password_hash, created_at, updated_at) VALUES ('ghost', 'h', 0, 0)`)
+pruneOldRows(now)
+assert.equal((db.prepare(`SELECT COUNT(*) n FROM client_credentials`).get() as { n: number }).n, 1, 'no clients yet → keep credentials')
+run(`INSERT INTO clients (name, token, created_at) VALUES ('dave', 't', 0)`)
+run(`INSERT INTO client_credentials (client_name, password_hash, created_at, updated_at) VALUES ('dave', 'h', 0, 0)`)
+run(`INSERT INTO client_profiles (client_name, updated_at) VALUES ('ghost', 0)`)
+pruneOldRows(now)
+const rows = db.prepare(`SELECT client, user_message m, error_detail e, cost_usd c FROM request_metrics WHERE client IN ('old', 'dave') ORDER BY ts`).all() as Array<{ client: string; m: string; e: string; c: number }>
+assert.deepEqual(rows.map((r) => [r.client, r.m, r.e, r.c]), [['dave', '', '', 5], ['dave', 'fresh', '', 0]])
+assert.deepEqual(db.prepare(`SELECT client_name FROM client_credentials`).all(), [{ client_name: 'dave' }])
+assert.equal((db.prepare(`SELECT COUNT(*) n FROM client_profiles`).get() as { n: number }).n, 0)
+
+console.log('metrics kpis + prune: 17 passed, 0 failed')

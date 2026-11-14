@@ -44,10 +44,25 @@ export function initMetrics() {
   cleanupTimer = setInterval(pruneOldRows, HOUR_MS).unref()
 }
 
-function pruneOldRows() {
-  const cutoff = Date.now() - RETENTION_DAYS * 24 * HOUR_MS
+// Prompt text / error payloads are only ever shown in the newest RECENT_LIMIT (dashboard) and
+// 20 (portal) rows; older copies are dead weight and private data. Counts/cost stay for 30 days.
+const TEXT_RETENTION_DAYS = 7
+
+export function pruneOldRows(now = Date.now()) {
   try {
-    getDb().prepare('DELETE FROM request_metrics WHERE ts < ?').run(cutoff)
+    const db = getDb()
+    db.prepare('DELETE FROM request_metrics WHERE ts < ?').run(now - RETENTION_DAYS * 24 * HOUR_MS)
+    db.prepare(
+      `UPDATE request_metrics SET user_message = '', error_detail = ''
+       WHERE ts < ? AND (user_message != '' OR error_detail != '')`,
+    ).run(now - TEXT_RETENTION_DAYS * 24 * HOUR_MS)
+    // Portal login + profile of clients removed outside the dashboard DELETE route. Guarded on a
+    // non-empty clients table: before the config.yaml migration runs, clients is still empty.
+    for (const t of ['client_credentials', 'client_profiles']) {
+      db.prepare(
+        `DELETE FROM ${t} WHERE client_name NOT IN (SELECT name FROM clients) AND EXISTS (SELECT 1 FROM clients)`,
+      ).run()
+    }
   } catch {
     // DB may not be initialized yet during early startup
   }
