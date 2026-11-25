@@ -980,19 +980,18 @@ ${renderBindingsModal()}
         cls: 'dtl', label: t('admin.kpi.cacheHit'), value: hitPct == null ? '—' : hitPct + '%',
         sub: t('admin.kpi.cacheHitSub', { tokens: fmtTokens(cur.cacheReadTokens || 0) }),
       },
-      {
-        label: t('admin.kpi.quota'), value: left5 == null ? '—' : t('admin.quota.leftLabel', { pct: left5 }),
-        cls: left5 == null ? '' : left5 <= 10 ? 'err' : left5 <= 25 ? 'warn' : '',
-        sub: tight
-          ? esc(tight.id) + (tight.w7 ? ' · 7d ' + t('admin.quota.leftLabel', { pct: Math.max(0, 100 - Math.round(tight.w7.usedPct)) }) : '')
-          : t('admin.kpi.quotaNone'),
+      // No account reports a 5h window → the tile is dropped, not shown as —.
+      tight && {
+        label: t('admin.kpi.quota'), value: t('admin.quota.leftLabel', { pct: left5 }),
+        cls: left5 <= 10 ? 'err' : left5 <= 25 ? 'warn' : '',
+        sub: esc(tight.id) + (tight.w7 ? ' · 7d ' + t('admin.quota.leftLabel', { pct: Math.max(0, 100 - Math.round(tight.w7.usedPct)) }) : ''),
       },
       {
         cls: 'dtl', label: t('admin.kpi.topSpender'), value: top ? esc(top.client) : '—',
         sub: top ? fmtCost(top.costUsd) + ' · ' + Math.round((top.costUsd / (cur.costUsd || 1)) * 100) + '%' : '',
       },
     ];
-    document.getElementById('topStats').innerHTML = tiles.map(s => \`
+    document.getElementById('topStats').innerHTML = tiles.filter(Boolean).map(s => \`
       <div class="card stat \${s.cls || ''}">
         <div class="label">\${s.label}</div>
         <div class="value">\${s.value}</div>

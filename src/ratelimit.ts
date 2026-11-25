@@ -106,6 +106,24 @@ export function captureRateLimitHeaders(
   })
 }
 
+/**
+ * True while Anthropic says this account's subscription quota is used up: the
+ * last response marked a window (or the unified status) `rejected`, or a window
+ * hit 100%, and that window has not reset yet. Routing skips such accounts so a
+ * client fails over to its next binding instead of eating 429s.
+ */
+export function isQuotaExhausted(accountId: string, now = Date.now()): boolean {
+  const s = latest.get(accountId)
+  if (!s) return false
+  // Without a reset time, trust the rejection for one 5h window from capture.
+  const live = (resetMs?: number) => (resetMs ?? s.capturedAt + FIVE_HOURS_MS) > now
+  const hit = s.windows.filter((w) => w.status === 'rejected' || (w.usedPct ?? 0) >= 100)
+  if (hit.length) return hit.some((w) => live(w.resetMs))
+  if (s.overallStatus !== 'rejected') return false
+  const reset = num(s.raw, `${PREFIX}unified-reset`)
+  return live(reset != null ? reset * 1000 : undefined)
+}
+
 /** Latest captured quota snapshot per account id; accounts never seen are absent. */
 export function getRateLimitSnapshots(): Record<string, RateLimitSnapshot> {
   return Object.fromEntries(latest)

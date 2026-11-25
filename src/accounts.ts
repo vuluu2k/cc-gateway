@@ -11,6 +11,7 @@ import {
 import type { OAuthTokens, PendingLogin } from './oauth-client.js'
 import { maskProxyUrl, validateProxyUrl } from './proxy-agent.js'
 import { getClientAccountCostSince, periodStart } from './metrics.js'
+import { isQuotaExhausted } from './ratelimit.js'
 
 const FIVE_MINUTES = 5 * 60 * 1000
 
@@ -429,9 +430,11 @@ export function isRestricted(row: AccountRow, spec: RequestSpec): boolean {
  * Pick the account a client's next request should spend against.
  *
  * Walks the client's bindings in priority order (lower first) and takes the
- * first one that is both alive and still inside its quota. There is no failover
- * on upstream errors — a 429/401 from the API surfaces to the client, and the
- * dead account only drops out on the NEXT call, once its state has been updated.
+ * first one that is both alive and still inside its quota. An account whose
+ * Anthropic subscription quota is exhausted (see isQuotaExhausted) is skipped
+ * too, but kept as a last resort: if nothing else is usable it is still picked,
+ * so the client gets upstream's real 429 (with its reset time), and it is used
+ * again by itself once the window resets.
  *
  * `billable` is false for the free endpoints (settings, event logging, …), which
  * must not be gated on a spending limit. `spec` skips accounts that block the
@@ -447,6 +450,7 @@ export function selectAccountFor(
 
   const blocked: BlockedBinding[] = []
   let restricted = false
+  let exhausted: SelectResult | undefined
 
   for (const binding of bindings) {
     const row = getAccountRow(binding.accountId)
@@ -477,8 +481,15 @@ export function selectAccountFor(
       }
     }
 
+    if (billable && isQuotaExhausted(binding.accountId)) {
+      exhausted ??= { ok: true, accountId: binding.accountId, accessToken, row }
+      continue
+    }
+
     return { ok: true, accountId: binding.accountId, accessToken, row }
   }
+
+  if (exhausted) return exhausted
 
   // Quota wins over availability in the report: a client that burned through
   // every limit needs a different message than one whose accounts all died.

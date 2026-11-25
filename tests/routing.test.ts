@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { strict as assert } from 'assert'
 import { initDb } from '../src/db.js'
+import { captureRateLimitHeaders } from '../src/ratelimit.js'
 import { recordRequest, getClientAccountCostSince, getClientCostSince, getAccountUsageTotals } from '../src/metrics.js'
 
 let passed = 0
@@ -280,6 +281,26 @@ test('account chặn model/effort thì bỏ qua, hết account → restricted', 
 import { reloadClients, lookupToken } from '../src/auth.js'
 
 console.log('\nauth - client nạp từ DB\n')
+
+test('account hết hạn mức Anthropic (rejected) → sang account kế, hết cả thì vẫn trả cái đầu', () => {
+  makeLiveAccount('sel-q-a')
+  makeLiveAccount('sel-q-b')
+  insertClientRow({ name: 'sel-q-client', token: 'tok-sel-q' })
+  replaceBindings('sel-q-client', [
+    { accountId: 'sel-q-a', priority: 1, limitUsd: 0, limitPeriod: 'lifetime' },
+    { accountId: 'sel-q-b', priority: 2, limitUsd: 0, limitPeriod: 'lifetime' },
+  ])
+  const rejected = { 'anthropic-ratelimit-unified-status': 'rejected' }
+  captureRateLimitHeaders('sel-q-a', rejected)
+  let r = selectAccountFor('sel-q-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-q-b')
+  // Free endpoints ignore subscription quota.
+  r = selectAccountFor('sel-q-client', false)
+  assert.equal(r.ok && r.accountId, 'sel-q-a')
+  captureRateLimitHeaders('sel-q-b', rejected)
+  r = selectAccountFor('sel-q-client', true)
+  assert.equal(r.ok && r.accountId, 'sel-q-a')
+})
 
 test('lookupToken thấy client vừa thêm sau reload', () => {
   insertClientRow({ name: 'carol', token: 'tok-carol' })

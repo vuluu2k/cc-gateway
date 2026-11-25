@@ -2,6 +2,7 @@ import {
   captureRateLimitHeaders,
   getRateLimitSnapshots,
   _resetRateLimitSnapshot,
+  isQuotaExhausted,
 } from '../src/ratelimit.js'
 import { strict as assert } from 'assert'
 
@@ -120,6 +121,29 @@ test('snapshots are kept per account, not overwritten by another account', () =>
   assert.deepEqual(Object.keys(all).sort(), ['acc-a', 'acc-b'])
   assert.equal(Math.round(all['acc-a'].windows.find((w) => w.key === '5h')!.usedPct!), 2)
   assert.equal(all['acc-b'].windows.find((w) => w.key === '5h')!.usedPct, 50)
+})
+
+test('isQuotaExhausted: rejected window counts until it resets', () => {
+  const now = Date.now()
+  const future = String(Math.floor((now + 3_600_000) / 1000))
+  const past = String(Math.floor((now - 1000) / 1000))
+  assert.equal(isQuotaExhausted('never-seen'), false)
+  captureRateLimitHeaders('ok', sampleHeaders())
+  assert.equal(isQuotaExhausted('ok'), false)
+  captureRateLimitHeaders('dead', {
+    'anthropic-ratelimit-unified-status': 'rejected',
+    'anthropic-ratelimit-unified-5h-status': 'rejected',
+    'anthropic-ratelimit-unified-5h-reset': future,
+  })
+  assert.equal(isQuotaExhausted('dead'), true)
+  captureRateLimitHeaders('reset', {
+    'anthropic-ratelimit-unified-5h-utilization': '1.0',
+    'anthropic-ratelimit-unified-5h-reset': past,
+  })
+  assert.equal(isQuotaExhausted('reset'), false)
+  // Weekly-only account (no 5h headers) rejected overall.
+  captureRateLimitHeaders('weekly', { 'anthropic-ratelimit-unified-status': 'rejected' })
+  assert.equal(isQuotaExhausted('weekly'), true)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

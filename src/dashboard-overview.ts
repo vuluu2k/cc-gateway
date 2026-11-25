@@ -177,12 +177,14 @@ export function overviewScript(): string {
       const pill = a.enabled
         ? '<span class="pill ' + (PILL[a.state] || 'warn') + '">' + esc(t('acct.state' + a.state.charAt(0).toUpperCase() + a.state.slice(1))) + '</span>'
         : '<span class="pill">' + esc(t('cc.off')) + '</span>';
-      const reset = w5 && w5.resetMs
-        ? '<div class="reset" data-reset="' + w5.resetMs + '">' + esc(t('admin.quota.resetIn', { t: fmtCountdown(w5.resetMs) })) + '</div>'
-        : (!w5 && !w7 ? '<div class="reset">' + esc(t('cc.noQuota')) + '</div>' : '');
+      const wr = w5 || w7;
+      const reset = wr && wr.resetMs
+        ? '<div class="reset" data-reset="' + wr.resetMs + '">' + esc(t('admin.quota.resetIn', { t: fmtCountdown(wr.resetMs) })) + '</div>'
+        : (!wr ? '<div class="reset">' + esc(t('cc.noQuota')) + '</div>' : '');
       return '<div class="acc' + (!a.enabled ? ' off' : needsLogin ? ' bad' : '') + '">'
         + '<div class="acc-top"><span class="dot ' + dot + '"></span><code>' + esc(a.id) + '</code><span class="lbl">' + esc(a.label) + '</span>' + pill + '</div>'
-        + meterRow('5h', w5) + meterRow('7d', w7) + reset
+        // A window the account doesn't report (e.g. no 5h limit) is hidden, not shown as —.
+        + (w5 ? meterRow('5h', w5) : '') + (w7 ? meterRow('7d', w7) : '') + reset
         + '<div class="acc-stats">'
         + '<div><b>' + fmtCost(u.costUsd) + '</b><span>' + esc(t('cc.cost24h')) + '</span></div>'
         + '<div><b>' + fmtNum(u.requests) + (u.errors ? '<em>' + fmtNum(u.errors) + ' ' + esc(t('cc.err')) + '</em>' : '') + '</b><span>' + esc(t('cc.req24h')) + '</span></div>'

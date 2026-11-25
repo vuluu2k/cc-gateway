@@ -393,7 +393,6 @@ const M: Record<string, Entry> = {
   'admin.kpi.cacheHit': { en: 'Cache hit · 24h', vi: 'Tỉ lệ cache · 24h', zh: '缓存命中 · 24 小时' },
   'admin.kpi.cacheHitSub': { en: '{tokens} tokens from cache', vi: '{tokens} token từ cache', zh: '{tokens} 令牌来自缓存' },
   'admin.kpi.quota': { en: 'Tightest 5h quota', vi: 'Hạn mức 5h sát nhất', zh: '最紧的 5 小时额度' },
-  'admin.kpi.quotaNone': { en: 'no quota headers yet', vi: 'chưa có header hạn mức', zh: '尚无额度响应头' },
   'admin.kpi.topSpender': { en: 'Top spender · 24h', vi: 'Tốn nhiều nhất · 24h', zh: '花费最多 · 24 小时' },
   'admin.stat.cacheRead': { en: 'Cache read', vi: 'Đọc cache', zh: '缓存读取' },
   'admin.stat.cacheWrite': { en: 'Cache write', vi: 'Ghi cache', zh: '缓存写入' },
